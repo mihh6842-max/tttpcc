@@ -666,8 +666,6 @@ async def init_db():
             active_ticket BOOLEAN DEFAULT 0,
             income_booster_end TIMESTAMP,
             auto_booster_end TIMESTAMP,
-            antivirus_end TIMESTAMP,
-            business_booster_end TIMESTAMP,
             expansion_level INTEGER DEFAULT 0  -- НОВОЕ: уровень экспансии
         )
     ''')
@@ -1886,102 +1884,6 @@ async def cmd_give_all_auto(message: Message):
     except Exception as e:
         logger.error(f"Error giving auto booster to all users: {e}")
         await message.answer('❌ Ошибка при выдаче автобустера')
-
-
-@cmd_admin_router.message(Command('give_all_virus'))
-async def cmd_give_all_virus(message: Message):
-    if message.from_user.id not in ADMIN:
-        await message.answer('❌ Недостаточно прав')
-        return
-
-    text_parts = message.text.split(' ')
-
-    if len(text_parts) != 2 or not text_parts[1].isdigit():
-        await message.answer('⚠️ Используйте: /give_all_virus (количество_дней)')
-        return
-
-    days = int(text_parts[1])
-
-    if days <= 0:
-        await message.answer('❌ Количество дней должно быть больше 0')
-        return
-
-    try:
-        total_users = await execute_query('SELECT COUNT(*) FROM stats')
-        total_count = total_users[0][0] if total_users else 0
-
-        if total_count == 0:
-            await message.answer('❌ В базе нет пользователей')
-            return
-
-        new_antivirus_date = datetime.datetime.now() + datetime.timedelta(days=days)
-
-        result = await execute_update(
-            'UPDATE stats SET antivirus_end = ?',
-            (new_antivirus_date,)
-        )
-
-        await message.answer(
-            f'✅ <b>Антивирус выдан всем пользователям!</b>\n\n'
-            f'👥 Количество пользователей: <b>{total_count}</b>\n'
-            f'⏰ Срок: <b>{days}</b> дней\n'
-            f'📅 Действует до: <code>{new_antivirus_date.strftime("%d.%m.%Y %H:%M")}</code>',
-            parse_mode='HTML'
-        )
-
-        logger.info(f"Admin {message.from_user.id} gave antivirus to all users for {days} days")
-
-    except Exception as e:
-        logger.error(f"Error giving antivirus to all users: {e}")
-        await message.answer('❌ Ошибка при выдаче антивируса')
-
-
-@cmd_admin_router.message(Command('give_all_biz'))
-async def cmd_give_all_biz(message: Message):
-    if message.from_user.id not in ADMIN:
-        await message.answer('❌ Недостаточно прав')
-        return
-
-    text_parts = message.text.split(' ')
-
-    if len(text_parts) != 2 or not text_parts[1].isdigit():
-        await message.answer('⚠️ Используйте: /give_all_biz (количество_дней)')
-        return
-
-    days = int(text_parts[1])
-
-    if days <= 0:
-        await message.answer('❌ Количество дней должно быть больше 0')
-        return
-
-    try:
-        total_users = await execute_query('SELECT COUNT(*) FROM stats')
-        total_count = total_users[0][0] if total_users else 0
-
-        if total_count == 0:
-            await message.answer('❌ В базе нет пользователей')
-            return
-
-        new_business_date = datetime.datetime.now() + datetime.timedelta(days=days)
-
-        result = await execute_update(
-            'UPDATE stats SET business_booster_end = ?',
-            (new_business_date,)
-        )
-
-        await message.answer(
-            f'✅ <b>Бустер бизнеса выдан всем пользователям!</b>\n\n'
-            f'👥 Количество пользователей: <b>{total_count}</b>\n'
-            f'⏰ Срок: <b>{days}</b> дней\n'
-            f'📅 Действует до: <code>{new_business_date.strftime("%d.%m.%Y %H:%M")}</code>',
-            parse_mode='HTML'
-        )
-
-        logger.info(f"Admin {message.from_user.id} gave business booster to all users for {days} days")
-
-    except Exception as e:
-        logger.error(f"Error giving business booster to all users: {e}")
-        await message.answer('❌ Ошибка при выдаче бустера бизнеса')
 
 
 @cmd_admin_router.message(Command('add_rep'))
