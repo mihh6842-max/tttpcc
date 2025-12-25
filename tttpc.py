@@ -16,7 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
-TOKEN = "7574504052:AAGuScWo3tKbj_NvT7B28LT-wCQXUhw75vE"
+TOKEN = "8525204431:AAE9emMJ-6R1m93ty9bC5StJwt-lRgd4ETA"
 PCCLUB = -1003246180665 
 ADMIN = [5929120983, 963551489, 8315604670, 7453830377, 7338817463]
 PAYMENT_TOKEN = "goida"
@@ -565,8 +565,7 @@ ROOM_NAMES = {
 }
 
 for i in range(51, 151):
-    expansion_num = (i - 1) // 10
-    ROOM_NAMES[i] = f"Экспансия {expansion_num} - Уровень {i}"
+    ROOM_NAMES[i] = f"Уровень {i}"
 
 getcontext().prec = 50
 
@@ -810,14 +809,142 @@ async def init_db():
             total_earned REAL DEFAULT 0
         )
     ''')
-    
-    await conn.commit()
-    
-    
-    
 
-    
-    
+    # Таблица для достижений
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS achievements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            category TEXT NOT NULL,
+            target_value INTEGER NOT NULL,
+            reward_type TEXT,
+            reward_value INTEGER
+        )
+    ''')
+
+    # Таблица прогресса достижений пользователей
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS user_achievements (
+            user_id INTEGER,
+            achievement_id INTEGER,
+            current_value INTEGER DEFAULT 0,
+            completed INTEGER DEFAULT 0,
+            claimed INTEGER DEFAULT 0,
+            completed_date TEXT,
+            PRIMARY KEY (user_id, achievement_id),
+            FOREIGN KEY(achievement_id) REFERENCES achievements(id)
+        )
+    ''')
+
+    # Таблица для боксов пользователей
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS user_boxes (
+            user_id INTEGER PRIMARY KEY,
+            starter_pack INTEGER DEFAULT 0,
+            gamer_case INTEGER DEFAULT 0,
+            business_box INTEGER DEFAULT 0,
+            champion_chest INTEGER DEFAULT 0,
+            pro_gear INTEGER DEFAULT 0,
+            legend_vault INTEGER DEFAULT 0,
+            vip_mystery INTEGER DEFAULT 0
+        )
+    ''')
+
+    # Таблица для статистики пользователей (для достижений)
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS user_achievement_stats (
+            user_id INTEGER PRIMARY KEY,
+            total_work_count INTEGER DEFAULT 0,
+            total_buy_count INTEGER DEFAULT 0,
+            total_sell_count INTEGER DEFAULT 0,
+            max_expansion_level INTEGER DEFAULT 0,
+            max_reputation_level INTEGER DEFAULT 0
+        )
+    ''')
+
+    # Таблица батл пасса
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS user_bp (
+            user_id INTEGER PRIMARY KEY,
+            level INTEGER DEFAULT 1,
+            current_task_id INTEGER DEFAULT 1,
+            task_progress INTEGER DEFAULT 0,
+            completed_today INTEGER DEFAULT 0
+        )
+    ''')
+
+    await conn.commit()
+
+# ===== БАТЛ ПАСС =====
+BP_MAX_LEVEL = 15
+BP_TASKS = [
+    {"id": 1, "name": "Купить 1 компьютер", "target": 1, "type": "buy"},
+    {"id": 2, "name": "Купить 3 компьютера", "target": 3, "type": "buy"},
+    {"id": 3, "name": "Продать 1 компьютер", "target": 1, "type": "sell"},
+    {"id": 4, "name": "Продать 3 компьютера", "target": 3, "type": "sell"},
+    {"id": 5, "name": "Сходить на работу 1 раз", "target": 1, "type": "work"},
+    {"id": 6, "name": "Сходить на работу 3 раза", "target": 3, "type": "work"},
+    {"id": 7, "name": "Оплатить налоги", "target": 1, "type": "taxes"},
+    {"id": 8, "name": "Открыть магазин 3 раза", "target": 3, "type": "shop"},
+    {"id": 9, "name": "Проверить статистику 3 раза", "target": 3, "type": "stats"},
+    {"id": 10, "name": "Посмотреть свои ПК 2 раза", "target": 2, "type": "my_pcs"},
+    {"id": 11, "name": "Сыграть в кубики 1 раз", "target": 1, "type": "dice"},
+    {"id": 12, "name": "Сыграть в кубики 3 раза", "target": 3, "type": "dice"},
+]
+
+BP_REWARDS = {
+    1: 500, 2: 700, 3: 900, 4: 1100, 5: 1400,
+    6: 1700, 7: 2000, 8: 2400, 9: 2800, 10: 3200,
+    11: 3700, 12: 4200, 13: 4800, 14: 5500, 15: 6500
+}
+
+async def get_user_bp(user_id: int):
+    """Получить данные БП пользователя"""
+    conn = await Database.get_connection()
+    cursor = await conn.execute('SELECT level, current_task_id, task_progress, completed_today FROM user_bp WHERE user_id = ?', (user_id,))
+    result = await cursor.fetchone()
+    if not result:
+        await conn.execute('INSERT INTO user_bp (user_id) VALUES (?)', (user_id,))
+        await conn.commit()
+        return {"level": 1, "task_id": 1, "progress": 0, "completed_today": 0}
+    return {"level": result[0], "task_id": result[1], "progress": result[2], "completed_today": result[3]}
+
+async def update_bp_progress(user_id: int, task_type: str, amount: int = 1):
+    """Обновить прогресс БП"""
+    bp = await get_user_bp(user_id)
+    if bp["level"] >= BP_MAX_LEVEL or bp["completed_today"]:
+        return None
+
+    task = next((t for t in BP_TASKS if t["id"] == bp["task_id"]), None)
+    if not task or task["type"] != task_type:
+        return None
+
+    new_progress = bp["progress"] + amount
+    conn = await Database.get_connection()
+
+    if new_progress >= task["target"]:
+        # Задание выполнено - выдаём награду и новое задание
+        reward = BP_REWARDS.get(bp["level"], 1000)
+        new_level = bp["level"] + 1
+        new_task_id = random.choice([t["id"] for t in BP_TASKS])
+
+        await conn.execute('UPDATE stats SET bal = bal + ? WHERE userid = ?', (reward, user_id))
+        await conn.execute('UPDATE user_bp SET level = ?, current_task_id = ?, task_progress = 0, completed_today = 1 WHERE user_id = ?',
+                          (new_level, new_task_id, user_id))
+        await conn.commit()
+        return {"completed": True, "reward": reward, "new_level": new_level}
+    else:
+        await conn.execute('UPDATE user_bp SET task_progress = ? WHERE user_id = ?', (new_progress, user_id))
+        await conn.commit()
+        return {"completed": False, "progress": new_progress, "target": task["target"]}
+
+async def reset_daily_bp():
+    """Сброс ежедневного лимита БП"""
+    conn = await Database.get_connection()
+    await conn.execute('UPDATE user_bp SET completed_today = 0')
+    await conn.commit()
+
 def parse_array(text):
     """Parse array from string format"""
     if text == '[]' or not text:
@@ -867,6 +994,485 @@ async def execute_update(query, params=()):
     await conn.execute(query, params)
     await conn.commit()
 
+# ============== СИСТЕМА ДОСТИЖЕНИЙ И БОКСОВ ==============
+
+async def initialize_achievements():
+    """Инициализация достижений в базе данных"""
+    achievements_data = [
+        # 💼 КАРЬЕРА (Работа) - Gamer's Case
+        ("🎮 Стажёр", "Отработать 24 смены", "work", 24, "starter_pack", 1),
+        ("🕹 Управляющий", "Отработать 100 смен", "work", 100, "gamer_case", 1),
+        ("👔 Директор", "Отработать 500 смен", "work", 500, "gamer_case", 2),
+        ("💼 Владелец сети", "Отработать 1000 смен", "work", 1000, "pro_gear", 1),
+        ("👑 Король клубов", "Отработать 2000 смен", "work", 2000, "legend_vault", 1),
+
+        # 🛍 ИНВЕСТОР (Покупка) - Business Box
+        ("💻 Первый апгрейд", "Купить 25 ПК", "buy", 25, "starter_pack", 1),
+        ("🖥 Коллекционер", "Купить 50 ПК", "buy", 50, "business_box", 1),
+        ("⚡ Скупщик железа", "Купить 100 ПК", "buy", 100, "business_box", 2),
+        ("🏪 Магнат техники", "Купить 250 ПК", "buy", 250, "business_box", 3),
+        ("🏢 Компьютерная империя", "Купить 1000 ПК", "buy", 1000, "pro_gear", 1),
+        ("🌆 Технологический гигант", "Купить 2500 ПК", "buy", 2500, "legend_vault", 1),
+        ("🌍 Мировой монополист", "Купить 5000 ПК", "buy", 5000, "vip_mystery", 1),
+
+        # 💸 ТРЕЙДЕР (Продажа) - Business Box
+        ("💵 Первая сделка", "Продать 25 ПК", "sell", 25, "starter_pack", 1),
+        ("💰 Продавец", "Продать 50 ПК", "sell", 50, "business_box", 1),
+        ("💎 Торговец года", "Продать 100 ПК", "sell", 100, "business_box", 2),
+        ("🤝 Бизнес-магнат", "Продать 250 ПК", "sell", 250, "business_box", 3),
+        ("👔 Король торговли", "Продать 1000 ПК", "sell", 1000, "pro_gear", 1),
+        ("💼 Торговая империя", "Продать 2500 ПК", "sell", 2500, "legend_vault", 1),
+        ("🌟 Легенда рынка", "Продать 5000 ПК", "sell", 5000, "vip_mystery", 1),
+
+        # 🖥 ЭКСПАНСИЯ - VIP Mystery
+        ("🌍 Покоритель района", "Достичь 1 уровня экспансии", "expansion", 1, "starter_pack", 1),
+        ("🌎 Властелин района", "Достичь 3 уровня экспансии", "expansion", 3, "gamer_case", 1),
+        ("🌏 Хозяин города", "Достичь 5 уровня экспансии", "expansion", 5, "business_box", 2),
+        ("🗺 Король мегаполиса", "Достичь 8 уровня экспансии", "expansion", 8, "vip_mystery", 1),
+        ("👑 Император регионов", "Достичь 10 уровня экспансии", "expansion", 10, "vip_mystery", 2),
+
+        # ✨ РЕПУТАЦИЯ - Champion Chest (макс 10 уровней)
+        ("⭐ Известный", "Достичь 1 уровня репутации", "reputation", 1, "starter_pack", 1),
+        ("🌟 Популярный", "Достичь 3 уровня репутации", "reputation", 3, "champion_chest", 1),
+        ("💫 Авторитет", "Достичь 5 уровня репутации", "reputation", 5, "champion_chest", 1),
+        ("🔥 Знаменитый", "Достичь 7 уровня репутации", "reputation", 7, "champion_chest", 2),
+        ("💎 Икона", "Достичь 9 уровня репутации", "reputation", 9, "pro_gear", 1),
+        ("👑 Легенда", "Достичь 10 уровня репутации", "reputation", 10, "legend_vault", 1),
+    ]
+
+    try:
+        conn = await Database.get_connection()
+        cursor = await conn.execute('SELECT COUNT(*) FROM achievements')
+        count = (await cursor.fetchone())[0]
+
+        if count == 0:
+            for achievement in achievements_data:
+                await conn.execute('''
+                INSERT INTO achievements (name, description, category, target_value, reward_type, reward_value)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ''', achievement)
+            await conn.commit()
+            logging.info("Achievements initialized successfully")
+    except Exception as e:
+        logging.error(f"Error initializing achievements: {e}")
+
+async def ensure_user_achievement_stats(user_id: int):
+    """Убедиться, что у пользователя есть запись статистики"""
+    try:
+        conn = await Database.get_connection()
+        cursor = await conn.execute('SELECT user_id FROM user_achievement_stats WHERE user_id = ?', (user_id,))
+        if not await cursor.fetchone():
+            await conn.execute('INSERT INTO user_achievement_stats (user_id) VALUES (?)', (user_id,))
+            await conn.commit()
+    except Exception as e:
+        logging.error(f"Error ensuring user achievement stats: {e}")
+
+async def ensure_user_boxes(user_id: int):
+    """Убедиться, что у пользователя есть запись для боксов"""
+    try:
+        conn = await Database.get_connection()
+        cursor = await conn.execute('SELECT user_id FROM user_boxes WHERE user_id = ?', (user_id,))
+        if not await cursor.fetchone():
+            await conn.execute('INSERT INTO user_boxes (user_id) VALUES (?)', (user_id,))
+            await conn.commit()
+    except Exception as e:
+        logging.error(f"Error ensuring user boxes: {e}")
+
+async def update_user_achievement_stat(user_id: int, stat_type: str, value: int = 1):
+    """Обновить статистику пользователя для достижений"""
+    await ensure_user_achievement_stats(user_id)
+
+    stat_mapping = {
+        'work': 'total_work_count',
+        'buy': 'total_buy_count',
+        'sell': 'total_sell_count',
+        'expansion': 'max_expansion_level',
+        'reputation': 'max_reputation_level'
+    }
+
+    column = stat_mapping.get(stat_type)
+    if not column:
+        return
+
+    try:
+        conn = await Database.get_connection()
+        if stat_type in ['expansion', 'reputation']:
+            await conn.execute(f'''
+            UPDATE user_achievement_stats
+            SET {column} = MAX({column}, ?)
+            WHERE user_id = ?
+            ''', (value, user_id))
+        else:
+            await conn.execute(f'''
+            UPDATE user_achievement_stats
+            SET {column} = {column} + ?
+            WHERE user_id = ?
+            ''', (value, user_id))
+        await conn.commit()
+
+        # Проверяем достижения
+        await check_achievements(user_id, stat_type)
+    except Exception as e:
+        logging.error(f"Error updating user achievement stat: {e}")
+
+async def check_achievements(user_id: int, category: str):
+    """Проверка и обновление достижений пользователя"""
+    await ensure_user_achievement_stats(user_id)
+
+    stat_mapping = {
+        'work': 'total_work_count',
+        'buy': 'total_buy_count',
+        'sell': 'total_sell_count',
+        'expansion': 'max_expansion_level',
+        'reputation': 'max_reputation_level'
+    }
+
+    column = stat_mapping.get(category)
+    if not column:
+        return
+
+    try:
+        conn = await Database.get_connection()
+
+        # Получаем текущее значение статистики
+        cursor = await conn.execute(f'SELECT {column} FROM user_achievement_stats WHERE user_id = ?', (user_id,))
+        result = await cursor.fetchone()
+        if not result:
+            return
+        current_value = result[0]
+
+        # Получаем все достижения этой категории
+        cursor = await conn.execute('SELECT id, target_value FROM achievements WHERE category = ?', (category,))
+        achievements = await cursor.fetchall()
+
+        for ach_id, target in achievements:
+            # Создаем запись если её нет
+            await conn.execute('''
+            INSERT OR IGNORE INTO user_achievements (user_id, achievement_id, current_value)
+            VALUES (?, ?, 0)
+            ''', (user_id, ach_id))
+
+            # Обновляем прогресс
+            completed = 1 if current_value >= target else 0
+            await conn.execute('''
+            UPDATE user_achievements
+            SET current_value = ?, completed = ?
+            WHERE user_id = ? AND achievement_id = ?
+            ''', (current_value, completed, user_id, ach_id))
+
+        await conn.commit()
+    except Exception as e:
+        logging.error(f"Error checking achievements: {e}")
+
+async def get_user_achievements(user_id: int, category: str):
+    """Получить достижения пользователя по категории"""
+    try:
+        conn = await Database.get_connection()
+        cursor = await conn.execute('''
+        SELECT a.id, a.name, a.description, a.target_value,
+               COALESCE(ua.current_value, 0) as current_value,
+               COALESCE(ua.completed, 0) as completed,
+               COALESCE(ua.claimed, 0) as claimed
+        FROM achievements a
+        LEFT JOIN user_achievements ua ON a.id = ua.achievement_id AND ua.user_id = ?
+        WHERE a.category = ?
+        ORDER BY a.target_value ASC
+        ''', (user_id, category))
+
+        achievements = []
+        async for row in cursor:
+            achievements.append({
+                'id': row[0],
+                'name': row[1],
+                'description': row[2],
+                'target_value': row[3],
+                'current_value': row[4],
+                'completed': row[5],
+                'claimed': row[6]
+            })
+        return achievements
+    except Exception as e:
+        logging.error(f"Error getting user achievements: {e}")
+        return []
+
+async def claim_achievement_reward(user_id: int, achievement_id: int) -> bool:
+    """Забрать награду за достижение"""
+    try:
+        conn = await Database.get_connection()
+
+        # Проверяем что достижение выполнено и не забрано
+        cursor = await conn.execute('''
+        SELECT completed, claimed FROM user_achievements
+        WHERE user_id = ? AND achievement_id = ?
+        ''', (user_id, achievement_id))
+        result = await cursor.fetchone()
+
+        if not result or result[0] != 1 or result[1] == 1:
+            return False
+
+        # Получаем награду
+        cursor = await conn.execute('''
+        SELECT reward_type, reward_value FROM achievements WHERE id = ?
+        ''', (achievement_id,))
+        reward = await cursor.fetchone()
+
+        if not reward:
+            return False
+
+        reward_type, reward_value = reward
+
+        # Выдаем награду
+        await ensure_user_boxes(user_id)
+
+        # Обновляем количество боксов
+        await conn.execute(f'''
+        UPDATE user_boxes SET {reward_type} = {reward_type} + ?
+        WHERE user_id = ?
+        ''', (reward_value, user_id))
+
+        # Отмечаем как забранное
+        await conn.execute('''
+        UPDATE user_achievements SET claimed = 1 WHERE user_id = ? AND achievement_id = ?
+        ''', (user_id, achievement_id))
+
+        await conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error claiming achievement reward: {e}")
+        return False
+
+async def open_box(user_id: int, box_type: str):
+    """Открыть бокс и получить награду"""
+    try:
+        conn = await Database.get_connection()
+        await ensure_user_boxes(user_id)
+
+        # Проверяем наличие бокса
+        cursor = await conn.execute(f'SELECT {box_type} FROM user_boxes WHERE user_id = ?', (user_id,))
+        result = await cursor.fetchone()
+
+        if not result or result[0] <= 0:
+            return None
+
+        # Уменьшаем количество боксов
+        await conn.execute(f'''
+        UPDATE user_boxes SET {box_type} = {box_type} - 1
+        WHERE user_id = ?
+        ''', (user_id,))
+
+        # Определяем награду в зависимости от типа бокса
+        # Все награды через часы заработка ПК (убраны фиксированные деньги)
+        box_config = {
+            "starter_pack": {
+                "rewards": [
+                    ("⏱ Заработок ПК", 80, lambda: random.randint(1, 6)),  # 1-6 часов
+                    ("🖥 ПК", 18.5, lambda: 1),
+                    ("⚡ Премиум", 0.5, lambda: random.randint(1, 12)),
+                ],
+                "name": "📦 STARTER PACK"
+            },
+            "gamer_case": {
+                "rewards": [
+                    ("⏱ Заработок ПК", 62, lambda: random.randint(3, 12)),  # 3-12 часов
+                    ("🖥 Игровой ПК", 31, lambda: 1),
+                    ("⚡ Премиум", 2, lambda: random.randint(1, 32)),
+                    ("🤖 Спонсор клуба", 2, lambda: random.randint(1, 32)),
+                    ("🔧 Автоматизация", 2, lambda: random.randint(1, 32)),
+                ],
+                "name": "🎮 GAMER'S CASE"
+            },
+            "business_box": {
+                "rewards": [
+                    ("⏱ Заработок ПК", 62, lambda: random.randint(6, 18)),  # 6-18 часов
+                    ("🖥 Бизнес ПК", 31, lambda: random.randint(1, 2)),
+                    ("⚡ Премиум", 2, lambda: random.randint(1, 32)),
+                    ("🤖 Спонсор клуба", 2, lambda: random.randint(1, 32)),
+                    ("🔧 Автоматизация", 2, lambda: random.randint(1, 32)),
+                ],
+                "name": "💼 BUSINESS BOX"
+            },
+            "champion_chest": {
+                "rewards": [
+                    ("⏱ Заработок ПК", 60, lambda: random.randint(12, 24)),  # 12-24 часов
+                    ("🖥 Элитный ПК", 30, lambda: random.randint(1, 3)),
+                    ("⚡ Премиум", 3, lambda: random.randint(12, 64)),
+                    ("🤖 Спонсор клуба", 3, lambda: random.randint(12, 64)),
+                    ("🔧 Автоматизация", 3, lambda: random.randint(12, 64)),
+                ],
+                "name": "🏆 CHAMPION CHEST"
+            },
+            "pro_gear": {
+                "rewards": [
+                    ("⏱ Заработок ПК", 50, lambda: random.randint(24, 48)),  # 24-48 часов
+                    ("🖥 Про-комплект ПК", 25, lambda: random.randint(2, 5)),
+                    ("⚡ Премиум", 8, lambda: random.randint(24, 128)),
+                    ("🤖 Спонсор клуба", 8, lambda: random.randint(24, 128)),
+                    ("🔧 Автоматизация", 8, lambda: random.randint(24, 128)),
+                ],
+                "name": "🧳 PRO GEAR CASE"
+            },
+            "legend_vault": {
+                "rewards": [
+                    ("⏱ Заработок ПК", 50, lambda: random.randint(48, 96)),  # 48-96 часов
+                    ("🖥 Легендарное оборудование", 25, lambda: random.randint(5, 10)),
+                    ("⚡ Премиум", 8, lambda: random.randint(48, 256)),
+                    ("🤖 Спонсор клуба", 8, lambda: random.randint(48, 256)),
+                    ("🔧 Автоматизация", 8, lambda: random.randint(48, 256)),
+                ],
+                "name": "👑 LEGEND'S VAULT"
+            },
+            "vip_mystery": {
+                "rewards": [
+                    ("⏱ Заработок ПК", 40, lambda: random.randint(96, 168)),  # 96-168 часов
+                    ("🖥 VIP Ферма", 20, lambda: random.randint(10, 25)),
+                    ("⚡ Премиум", 13, lambda: random.randint(128, 512)),
+                    ("🤖 Спонсор клуба", 13, lambda: random.randint(128, 512)),
+                    ("🔧 Автоматизация", 13, lambda: random.randint(128, 512)),
+                ],
+                "name": "🌟 VIP MYSTERY BOX"
+            }
+        }
+
+        config = box_config.get(box_type, box_config["starter_pack"])
+        rewards = config["rewards"]
+
+        # Выбираем награду
+        rand = random.uniform(0, 100)
+        cumulative = 0
+        selected_reward = None
+
+        for reward_name, chance, value_func in rewards:
+            cumulative += chance
+            if rand <= cumulative:
+                selected_reward = (reward_name, value_func(), config["name"])
+                break
+
+        if not selected_reward:
+            selected_reward = (rewards[0][0], rewards[0][2](), config["name"])
+
+        # Применяем награду
+        reward_name, reward_value, box_name = selected_reward
+
+        # Деньги
+        if "Деньги" in reward_name or "доход" in reward_name or "приз" in reward_name or "гонорар" in reward_name or "богатство" in reward_name or "Jackpot" in reward_name:
+            await conn.execute('UPDATE stats SET bal = bal + ? WHERE userid = ?', (reward_value, user_id))
+
+        # Заработок ПК (даём деньги = часы × доход в час × 6)
+        elif "Заработок" in reward_name or "Работа" in reward_name or "время" in reward_name:
+            cursor = await conn.execute('SELECT income FROM stats WHERE userid = ?', (user_id,))
+            income_row = await cursor.fetchone()
+            if income_row:
+                hourly_income = (income_row[0] or 0) * 6  # доход за 10 мин × 6 = доход в час
+                money_reward = reward_value * hourly_income
+                if money_reward < 100:  # минимум 100$ за час
+                    money_reward = reward_value * 100
+                await conn.execute('UPDATE stats SET bal = bal + ? WHERE userid = ?', (money_reward, user_id))
+
+        # ПК
+        elif "ПК" in reward_name or "оборудование" in reward_name or "Ферма" in reward_name:
+            # Получаем данные пользователя
+            cursor = await conn.execute('SELECT room, pc FROM stats WHERE userid = ?', (user_id,))
+            user_data = await cursor.fetchone()
+            if not user_data:
+                return None
+
+            room_level, current_pcs = user_data
+            max_slots = room_level * 5
+
+            # Получаем доступные ПК
+            available_pcs = await get_available_pcs(user_id)
+            if not available_pcs:
+                available_pcs = [[1, 5, 3600]]  # Fallback на первый уровень
+
+            # Выбираем случайный ПК из доступных
+            selected_pc = random.choice(available_pcs)
+            pc_level, pc_income, pc_cost = selected_pc
+
+            # Сохраняем уровень ПК для отображения в награде
+            reward_pc_level = pc_level
+
+            # Проверяем лимит слотов
+            computers_to_add = 0
+            money_from_overflow = 0
+
+            for i in range(reward_value):
+                if current_pcs + computers_to_add < max_slots:
+                    # Добавляем ПК
+                    computers_to_add += 1
+                else:
+                    # Конвертируем в деньги (стоимость ПК)
+                    money_from_overflow += pc_cost
+
+            # Добавляем ПК в слоты
+            if computers_to_add > 0:
+                for _ in range(computers_to_add):
+                    await conn.execute('INSERT INTO pc (userid, lvl, income) VALUES (?, ?, ?)',
+                                     (user_id, pc_level, pc_income))
+                await conn.execute('UPDATE stats SET pc = pc + ? WHERE userid = ?',
+                                 (computers_to_add, user_id))
+                # Пересчитываем доход
+                cursor = await conn.execute('SELECT SUM(income) FROM pc WHERE userid = ?', (user_id,))
+                total_income = await cursor.fetchone()
+                if total_income and total_income[0]:
+                    await conn.execute('UPDATE stats SET income = ? WHERE userid = ?',
+                                     (total_income[0], user_id))
+
+            # Добавляем деньги за переполнение
+            if money_from_overflow > 0:
+                await conn.execute('UPDATE stats SET bal = bal + ? WHERE userid = ?',
+                                 (money_from_overflow, user_id))
+
+            # Обновляем название награды чтобы показать уровень и детали
+            original_name = reward_name
+            if reward_value > 1:
+                reward_name = f"{original_name}: {reward_value} шт {pc_level} lvl"
+            else:
+                reward_name = f"{original_name}: 1 шт {pc_level} lvl"
+
+            # Добавляем информацию о конвертации если была
+            if money_from_overflow > 0:
+                from decimal import Decimal
+                reward_name += f"\n💰 Слоты полны! Конвертировано в {format_number_short(Decimal(money_from_overflow), True)}$"
+
+            # Обновляем selected_reward
+            selected_reward = (reward_name, reward_value, box_name)
+
+        # Премиум
+        elif "Премиум" in reward_name:
+            hours = reward_value
+            await conn.execute('''
+                UPDATE stats SET premium = CASE
+                    WHEN premium > datetime('now') THEN datetime(premium, '+' || ? || ' hours')
+                    ELSE datetime('now', '+' || ? || ' hours')
+                END WHERE userid = ?
+            ''', (hours, hours, user_id))
+
+        # Спонсор клуба
+        elif "Спонсор" in reward_name:
+            hours = reward_value
+            await conn.execute('''
+                UPDATE stats SET income_booster_end = CASE
+                    WHEN income_booster_end > datetime('now') THEN datetime(income_booster_end, '+' || ? || ' hours')
+                    ELSE datetime('now', '+' || ? || ' hours')
+                END WHERE userid = ?
+            ''', (hours, hours, user_id))
+
+        # Автоматизация
+        elif "Автоматизация" in reward_name:
+            hours = reward_value
+            await conn.execute('''
+                UPDATE stats SET auto_booster_end = CASE
+                    WHEN auto_booster_end > datetime('now') THEN datetime(auto_booster_end, '+' || ? || ' hours')
+                    ELSE datetime('now', '+' || ? || ' hours')
+                END WHERE userid = ?
+            ''', (hours, hours, user_id))
+
+        await conn.commit()
+        return selected_reward
+    except Exception as e:
+        logging.error(f"Error opening box: {e}")
+        return None
+
 # ===== FSM STATES =====
 class Network_search(StatesGroup):
     id = State()
@@ -905,6 +1511,10 @@ dp = Dispatcher()
 # Кулдаун для покупок ПК (1.5 секунды между покупками)
 buy_cooldowns = {}
 BUY_COOLDOWN = 1.5  # секунды
+
+# Кулдаун для открытия кейсов (3 секунды между открытиями)
+box_cooldowns = {}
+BOX_COOLDOWN = 3.0  # секунды
 
 # ===== ROUTERS =====
 fsm_router = Router()
@@ -1334,23 +1944,50 @@ async def do_expansion(user_id: int) -> bool:
         
         # Сбрасываем репутацию пользователя
         await execute_update(
-            '''UPDATE user_reputation SET 
+            '''UPDATE user_reputation SET
                reputation_points = 0,
                reputation_level = 1,
                total_earned_reputation = 0
                WHERE user_id = ?''',
             (user_id,)
         )
-        
+
+        # Сбрасываем все достижения (кроме экспансии)
+        await execute_update(
+            '''UPDATE user_achievement_stats SET
+               total_work_count = 0,
+               total_buy_count = 0,
+               total_sell_count = 0,
+               max_reputation_level = 1
+               WHERE user_id = ?''',
+            (user_id,)
+        )
+
+        # Сбрасываем прогресс всех достижений (кроме экспансии)
+        await execute_update(
+            '''UPDATE user_achievements SET
+               current_value = 0,
+               completed = 0,
+               claimed = 0
+               WHERE user_id = ? AND achievement_id IN (
+                   SELECT id FROM achievements WHERE category != 'expansion'
+               )''',
+            (user_id,)
+        )
+
         # Удаляем все компьютеры пользователя
         await execute_update(
             'DELETE FROM pc WHERE userid = ?',
             (user_id,)
         )
-        
+
         logger.info(f"User {user_id} completed expansion to level {new_expansion_level}")
+
+        # Обновляем статистику достижений
+        await update_user_achievement_stat(user_id, 'expansion', new_expansion_level)
+
         return True
-        
+
     except Exception as e:
         logger.error(f"Error doing expansion for user {user_id}: {e}")
         return False
@@ -1629,13 +2266,23 @@ async def do_work(user_id: int, job_id: int):
     
     await execute_update('UPDATE stats SET bal = ? WHERE userid = ?', (new_bal, user_id))
     await execute_update('''
-        UPDATE user_work_stats 
+        UPDATE user_work_stats
         SET exp = exp + 1, last_work = ?, total_earned = total_earned + ?
         WHERE user_id = ?
     ''', (datetime.datetime.now().isoformat(), reward, user_id))
-    
+
+    # Обновляем статистику достижений
+    await update_user_achievement_stat(user_id, 'work', 1)
+
+    # Обновляем батл пасс
+    bp_result = await update_bp_progress(user_id, 'work', 1)
+
     # Новое сообщение с репутацией
     result_text = f"✅ {job['name']}\n💵 +{reward}$\n🌟 Опыт: {exp+1}\n✨ +{rep_points} Репутации"
+
+    # Добавляем инфо о БП если выполнено
+    if bp_result and bp_result.get("completed"):
+        result_text += f"\n\n🎮 БП: +{bp_result['reward']}$! Новый уровень: {bp_result['new_level']}"
     
     if level_up:
         rep_info = await get_current_reputation_info(user_id)
@@ -2124,12 +2771,298 @@ async def cmd_give_premium(message: Message):
         )
         
         logger.info(f"Admin {message.from_user.id} gave premium to user {target_user_id} for {days} days")
-        
+
     except Exception as e:
         logger.error(f"Error giving premium to user: {e}")
-        await message.answer('❌ Ошибка при выдаче премиума')                                                
-                                
-        
+        await message.answer('❌ Ошибка при выдаче премиума')
+
+@cmd_admin_router.message(Command('give_box'))
+async def cmd_give_box(message: Message):
+    """Выдать кейсы пользователю"""
+    if message.from_user.id not in ADMIN:
+        await message.answer('❌ Недостаточно прав')
+        return
+
+    text_parts = message.text.split(' ')
+
+    if len(text_parts) != 4:
+        await message.answer(
+            '⚠️ Используйте: /give_box (ID_пользователя) (тип_кейса) (количество)\n\n'
+            '*Типы кейсов:*\n'
+            '• starter_pack\n'
+            '• gamer_case\n'
+            '• business_box\n'
+            '• champion_chest\n'
+            '• pro_gear\n'
+            '• legend_vault\n'
+            '• vip_mystery\n\n'
+            '*Пример:*\n'
+            '`/give_box 5929120983 gamer_case 5`',
+            parse_mode='Markdown'
+        )
+        return
+
+    # Проверка ID пользователя
+    if not text_parts[1].isdigit():
+        await message.answer('❌ ID пользователя должен быть числом')
+        return
+
+    target_user_id = int(text_parts[1])
+    box_type = text_parts[2].lower()
+
+    # Проверка типа кейса
+    valid_boxes = ['starter_pack', 'gamer_case', 'business_box', 'champion_chest', 'pro_gear', 'legend_vault', 'vip_mystery']
+    if box_type not in valid_boxes:
+        await message.answer(f'❌ Неверный тип кейса. Доступные типы: {", ".join(valid_boxes)}')
+        return
+
+    # Проверка количества
+    if not text_parts[3].isdigit():
+        await message.answer('❌ Количество должно быть числом')
+        return
+
+    amount = int(text_parts[3])
+    if amount <= 0:
+        await message.answer('❌ Количество должно быть больше 0')
+        return
+
+    try:
+        # Проверяем существование пользователя
+        user = await execute_query_one(
+            'SELECT name FROM stats WHERE userid = ?',
+            (target_user_id,)
+        )
+
+        if not user:
+            await message.answer('❌ Пользователь не найден')
+            return
+
+        user_name = user[0]
+
+        # Проверяем есть ли у пользователя запись в user_boxes
+        existing_boxes = await execute_query_one(
+            'SELECT user_id FROM user_boxes WHERE user_id = ?',
+            (target_user_id,)
+        )
+
+        if not existing_boxes:
+            # Создаем запись
+            await execute_update(
+                'INSERT INTO user_boxes (user_id) VALUES (?)',
+                (target_user_id,)
+            )
+
+        # Добавляем кейсы
+        await execute_update(
+            f'UPDATE user_boxes SET {box_type} = {box_type} + ? WHERE user_id = ?',
+            (amount, target_user_id)
+        )
+
+        # Название кейса для отображения
+        box_names = {
+            'starter_pack': '📦 STARTER PACK',
+            'gamer_case': '🎮 GAMER CASE',
+            'business_box': '💼 BUSINESS BOX',
+            'champion_chest': '🏆 CHAMPION CHEST',
+            'pro_gear': '⚡ PRO GEAR',
+            'legend_vault': '🔥 LEGEND VAULT',
+            'vip_mystery': '💎 VIP MYSTERY'
+        }
+
+        box_display_name = box_names.get(box_type, box_type)
+
+        # Уведомляем пользователя
+        try:
+            await bot.send_message(
+                target_user_id,
+                f'🎁 <b>Вам выданы кейсы!</b>\n\n'
+                f'📦 Тип: <b>{box_display_name}</b>\n'
+                f'📊 Количество: <b>{amount}</b> шт\n\n'
+                f'Открывайте командой /open_{box_type}',
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logger.warning(f"Could not notify user {target_user_id}: {e}")
+
+        await message.answer(
+            f'✅ <b>Кейсы успешно выданы!</b>\n\n'
+            f'👤 Пользователь: <b>{user_name}</b>\n'
+            f'🆔 ID: <code>{target_user_id}</code>\n'
+            f'📦 Тип: <b>{box_display_name}</b>\n'
+            f'📊 Количество: <b>{amount}</b> шт',
+            parse_mode='HTML'
+        )
+
+        logger.info(f"Admin {message.from_user.id} gave {amount} {box_type} to user {target_user_id}")
+
+    except Exception as e:
+        logger.error(f"Error giving boxes: {e}")
+        await message.answer('❌ Ошибка при выдаче кейсов')
+
+@cmd_admin_router.message(Command('complete_achievement'))
+async def cmd_complete_achievement(message: Message):
+    """Выполнить достижение для пользователя"""
+    if message.from_user.id not in ADMIN:
+        await message.answer('❌ Недостаточно прав')
+        return
+
+    text_parts = message.text.split(' ')
+
+    if len(text_parts) != 3:
+        await message.answer(
+            '⚠️ Используйте: /complete_achievement (ID_пользователя) (ID_достижения)\n\n'
+            '*Пример:*\n'
+            '`/complete_achievement 5929120983 1`\n\n'
+            '*Чтобы узнать ID достижения, используйте:*\n'
+            '`/list_achievements`',
+            parse_mode='Markdown'
+        )
+        return
+
+    # Проверка ID пользователя
+    if not text_parts[1].isdigit():
+        await message.answer('❌ ID пользователя должен быть числом')
+        return
+
+    target_user_id = int(text_parts[1])
+
+    # Проверка ID достижения
+    if not text_parts[2].isdigit():
+        await message.answer('❌ ID достижения должен быть числом')
+        return
+
+    achievement_id = int(text_parts[2])
+
+    try:
+        # Проверяем существование пользователя
+        user = await execute_query_one(
+            'SELECT name FROM stats WHERE userid = ?',
+            (target_user_id,)
+        )
+
+        if not user:
+            await message.answer('❌ Пользователь не найден')
+            return
+
+        user_name = user[0]
+
+        # Проверяем существование достижения
+        achievement = await execute_query_one(
+            'SELECT name, description, category, target_value FROM achievements WHERE id = ?',
+            (achievement_id,)
+        )
+
+        if not achievement:
+            await message.answer('❌ Достижение не найдено')
+            return
+
+        ach_name, ach_desc, ach_category, target_value = achievement
+
+        # Проверяем есть ли у пользователя это достижение
+        user_achievement = await execute_query_one(
+            'SELECT current_value, completed, claimed FROM user_achievements WHERE user_id = ? AND achievement_id = ?',
+            (target_user_id, achievement_id)
+        )
+
+        if not user_achievement:
+            # Создаем запись о достижении
+            await execute_update(
+                'INSERT INTO user_achievements (user_id, achievement_id, current_value, completed, claimed) VALUES (?, ?, ?, 1, 0)',
+                (target_user_id, achievement_id, target_value)
+            )
+        else:
+            # Обновляем существующее достижение
+            await execute_update(
+                'UPDATE user_achievements SET current_value = ?, completed = 1 WHERE user_id = ? AND achievement_id = ?',
+                (target_value, target_user_id, achievement_id)
+            )
+
+        # Уведомляем пользователя
+        try:
+            await bot.send_message(
+                target_user_id,
+                f'🏆 <b>Достижение выполнено администратором!</b>\n\n'
+                f'📜 Достижение: <b>{ach_name}</b>\n'
+                f'📝 {ach_desc}\n\n'
+                f'Используйте /achievements чтобы забрать награду!',
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logger.warning(f"Could not notify user {target_user_id}: {e}")
+
+        await message.answer(
+            f'✅ <b>Достижение выполнено!</b>\n\n'
+            f'👤 Пользователь: <b>{user_name}</b>\n'
+            f'🆔 ID: <code>{target_user_id}</code>\n'
+            f'🏆 Достижение: <b>{ach_name}</b>\n'
+            f'📝 {ach_desc}',
+            parse_mode='HTML'
+        )
+
+        logger.info(f"Admin {message.from_user.id} completed achievement {achievement_id} for user {target_user_id}")
+
+    except Exception as e:
+        logger.error(f"Error completing achievement: {e}")
+        await message.answer('❌ Ошибка при выполнении достижения')
+
+@cmd_admin_router.message(Command('list_achievements'))
+async def cmd_list_achievements(message: Message):
+    """Показать список всех достижений"""
+    if message.from_user.id not in ADMIN:
+        await message.answer('❌ Недостаточно прав')
+        return
+
+    try:
+        achievements = await execute_query(
+            'SELECT id, name, description, category, target_value FROM achievements ORDER BY category, target_value'
+        )
+
+        if not achievements:
+            await message.answer('❌ Достижения не найдены')
+            return
+
+        # Группируем по категориям
+        categories = {
+            'work': '💼 Работа',
+            'buy': '🛒 Покупки',
+            'sell': '💰 Продажи',
+            'expansion': '🚀 Экспансия',
+            'reputation': '⭐ Репутация'
+        }
+
+        text = '<b>📋 Список всех достижений:</b>\n\n'
+        current_category = None
+
+        for ach_id, name, desc, category, target in achievements:
+            if category != current_category:
+                current_category = category
+                category_name = categories.get(category, category)
+                text += f'\n<b>{category_name}</b>\n'
+
+            text += f'ID: <code>{ach_id}</code> | {name or desc} (цель: {target})\n'
+
+        # Разбиваем на несколько сообщений если слишком длинно
+        if len(text) > 4000:
+            parts = text.split('\n\n')
+            current_msg = parts[0] + '\n\n'
+
+            for part in parts[1:]:
+                if len(current_msg) + len(part) > 4000:
+                    await message.answer(current_msg, parse_mode='HTML')
+                    current_msg = '<b>📋 Список всех достижений (продолжение):</b>\n\n' + part + '\n\n'
+                else:
+                    current_msg += part + '\n\n'
+
+            if current_msg:
+                await message.answer(current_msg, parse_mode='HTML')
+        else:
+            await message.answer(text, parse_mode='HTML')
+
+    except Exception as e:
+        logger.error(f"Error listing achievements: {e}")
+        await message.answer('❌ Ошибка при получении списка достижений')
+
+
 @cmd_user_router.message(Command('nickname'))
 async def cmd_nickname(message: Message):
     user = await execute_query_one('SELECT name FROM stats WHERE userid = ?', (message.from_user.id,))
@@ -2168,8 +3101,40 @@ async def cmd_nickname(message: Message):
     if not name:
         await execute_update('UPDATE stats SET name = ? WHERE userid = ?', (new_nickname, message.from_user.id))
         await message.answer(f'✅ Вы успешно изменили никнейм на: {new_nickname}')
-    else: 
+    else:
         await message.answer('⚠️ Этот никнейм уже занят')
+
+@cmd_user_router.message(Command('bp'))
+async def cmd_bp(message: Message):
+    """Показать батл пасс"""
+    user_id = message.from_user.id
+    bp = await get_user_bp(user_id)
+
+    if bp["level"] >= BP_MAX_LEVEL:
+        await message.answer(
+            f"🎮 <b>Батл пасс</b>\n\n"
+            f"🏆 Вы достигли максимального уровня: {BP_MAX_LEVEL}!\n"
+            f"Поздравляем! 🎉",
+            parse_mode="HTML"
+        )
+        return
+
+    task = next((t for t in BP_TASKS if t["id"] == bp["task_id"]), BP_TASKS[0])
+    reward = BP_REWARDS.get(bp["level"], 1000)
+    remaining = task["target"] - bp["progress"]
+
+    status = "✅ Выполнено! Ждите новое задание" if bp["completed_today"] else f"🔹 Осталось: {remaining}"
+
+    text = (
+        f"🎮 <b>Батл пасс</b>\n\n"
+        f"Ваш уровень: <b>{bp['level']}/{BP_MAX_LEVEL}</b> ✨\n\n"
+        f"📋 Текущее задание:\n"
+        f"<b>{task['name']}</b>: {bp['progress']}/{task['target']}\n\n"
+        f"{status}\n"
+        f"💰 Награда за выполнение: <b>{reward}$</b>"
+    )
+
+    await message.answer(text, parse_mode="HTML")
 
 @cmd_user_router.message(Command('stats'))
 async def cmd_stats(message: Message):
@@ -2357,14 +3322,22 @@ async def add_reputation(user_id: int, points: int, reason: str = ""):
     for level_info in REPUTATION_LEVELS:
         if new_points >= level_info["points_required"] and level_info["level"] > new_level:
             new_level = level_info["level"]
-    
+
+    # Ограничиваем максимальный уровень (для достижений)
+    max_reputation_level = 10
+    new_level = min(new_level, max_reputation_level)
+
     if new_level > current_level:
         await execute_update(
             'UPDATE user_reputation SET reputation_level = ? WHERE user_id = ?',
             (new_level, user_id)
         )
+
+        # Обновляем статистику достижений
+        await update_user_achievement_stat(user_id, 'reputation', new_level)
+
         return new_points, new_level, True  # Возвращаем с флагом повышения уровня
-    
+
     return new_points, current_level, False
 
 async def get_reputation_bonuses(user_id: int):
@@ -2500,27 +3473,36 @@ async def cmd_top(message: Message):
         
     await update_data(message.from_user.username, message.from_user.id)
     await add_action(message.from_user.id, 'cmd_top')
-    
-    # Получаем топ-5 по балансу и доходу
+
+    # Получаем топ-5 по балансу, доходу и экспансии
     bal = await execute_query('SELECT name, bal FROM stats ORDER BY bal DESC LIMIT 5')
     income = await execute_query('SELECT name, income FROM stats ORDER BY income DESC LIMIT 5')
-    
+    expansion = await execute_query('SELECT name, expansion_level FROM stats WHERE expansion_level > 0 ORDER BY expansion_level DESC LIMIT 5')
+
     text = '💵 Топ 5⃣ игроков по балансу:\n\n'
-    
+
     # Топ по балансу
     num = 1
     for user_data in bal:
         text += f'{num}⃣ {user_data[0]} - {format_number_short(user_data[1], True)}$\n'
         num += 1
-    
+
     # Топ по доходу
     text += '\n💸 Топ 5⃣ игроков по доходу:\n\n'
-    
+
     num = 1
     for user_data in income:
         text += f'{num}⃣ {user_data[0]} - {format_number_short(user_data[1], True)}$ / 10 мин.\n'
         num += 1
-    
+
+    # Топ по экспансии
+    if expansion:
+        text += '\n🚀 Топ 5⃣ игроков по экспансии:\n\n'
+        num = 1
+        for user_data in expansion:
+            text += f'{num}⃣ {user_data[0]} - Экспансия {user_data[1]} 🌟\n'
+            num += 1
+
     await message.answer(text)
     
     
@@ -2530,21 +3512,21 @@ async def cmd_top_franchise(message: Message):
     if not user:
         await message.answer('Сначала зарегистрируйтесь - /start')
         return
-        
+
     await update_data(message.from_user.username, message.from_user.id)
     await add_action(message.from_user.id, 'cmd_top_franchise')
-    
+
     # Получаем топ-10 франшиз по доходу
-    franchises = await execute_query('SELECT name, income FROM networks WHERE owner_id != ? ORDER BY income DESC LIMIT 10', 
+    franchises = await execute_query('SELECT name, income FROM networks WHERE owner_id != ? ORDER BY income DESC LIMIT 10',
                            (ADMIN[0],))
-    
+
     text = '💪 Топ 10 франшиз по доходу:\n\n'
-    
+
     # Отображаем топ-10 франшиз с медалями для первых трех мест
     for i, franchise in enumerate(franchises, 1):
         franchise_name = franchise[0] if franchise[0] else "Название не установлено"
         income = franchise[1]
-        
+
         # Определяем эмодзи для первых трех мест
         if i == 1:
             place_emoji = "🥇"
@@ -2554,14 +3536,14 @@ async def cmd_top_franchise(message: Message):
             place_emoji = "🥉"
         else:
             place_emoji = f"{i}⃣"
-        
+
         text += f'{place_emoji} {franchise_name} - {format_number_short(income, True)} 💸\n\n'
-    
+
     # Добавляем информацию о выдаче премиума
     text += '❗ Топ 8 и 2 случайных игрока из топ-10 франшиз получат PREMIUM каждое воскресенье, в 18:00 по МСК ❗'
-    
+
     await message.answer(text)
-    
+
 @cmd_admin_router.message(Command('delete_all_titles'))
 async def cmd_delete_all_titles(message: Message):
     if message.from_user.id not in ADMIN:
@@ -3289,11 +4271,10 @@ async def cmd_profile(message: Message):
     # Полезные команды
     text += "📝 *Полезные команды:*\n"
     text += "• Сменить ник - /nickname\n"
-    text += "• Статистика - /stats\n"
-    text += "• Работа - /work\n"
-    text += "• Титулы - /titles\n"
     text += "• Репутация - /reputation\n"
-    text += "• Бонусы - /social"
+    text += "• Бонусы - /social\n"
+    text += "• Достижения - /achievements\n"
+    text += "• Боксы - /box"
     
     # Бонусная кнопка
     if user[2] == 1:
@@ -4171,10 +5152,19 @@ async def cmd_sell(message: Message):
             # Получаем доход от одного такого компьютера
             pc_income = Decimal(str(pc_data[1]))
             
-            await execute_update('UPDATE stats SET bal = bal + ?, income = income - ?, pc = pc - ? WHERE userid = ?', 
+            await execute_update('UPDATE stats SET bal = bal + ?, income = income - ?, pc = pc - ? WHERE userid = ?',
                          (total_income, float(pc_income * quantity), quantity, message.from_user.id))
-            
-            await message.answer(f'💻 Вы успешно продали {quantity} шт. | Компьютер {level} ур. | 💰 +{total_income}$')
+
+            # Обновляем статистику достижений
+            await update_user_achievement_stat(message.from_user.id, 'sell', quantity)
+
+            # Обновляем батл пасс
+            bp_result = await update_bp_progress(message.from_user.id, 'sell', quantity)
+
+            sell_text = f'💻 Вы успешно продали {quantity} шт. | Компьютер {level} ур. | 💰 +{total_income}$'
+            if bp_result and bp_result.get("completed"):
+                sell_text += f"\n\n🎮 БП: +{bp_result['reward']}$! Уровень: {bp_result['new_level']}"
+            await message.answer(sell_text)
         else:
             available = await execute_query_one('SELECT COUNT(*) FROM pc WHERE userid = ? AND lvl = ?', 
                                         (message.from_user.id, level))
@@ -4275,15 +5265,24 @@ async def cmd_buy(message: Message):
                          (pc_found[2] * quantity, quantity, float(pc_income * quantity), quantity, message.from_user.id))
             
             for _ in range(quantity):
-                await execute_update('INSERT INTO pc (userid, lvl, income) VALUES (?, ?, ?)', 
+                await execute_update('INSERT INTO pc (userid, lvl, income) VALUES (?, ?, ?)',
                              (message.from_user.id, level, float(pc_income)))
-            
+
+            # Обновляем статистику достижений
+            await update_user_achievement_stat(message.from_user.id, 'buy', quantity)
+
+            # Обновляем батл пасс
+            bp_result = await update_bp_progress(message.from_user.id, 'buy', quantity)
+
             # Новое сообщение с репутацией
             response_text = (
                 f'💻 Вы успешно купили {quantity} шт. | Компьютер {level} ур. |\n'
                 f'💰Затраты: -{format_number_short(pc_found[2] * quantity, True)}$\n'
                 f'✨ +{rep_points} Репутации'
             )
+
+            if bp_result and bp_result.get("completed"):
+                response_text += f"\n\n🎮 БП: +{bp_result['reward']}$! Уровень: {bp_result['new_level']}"
 
             if level_up:
                 rep_info = await get_current_reputation_info(message.from_user.id)
@@ -6822,7 +7821,506 @@ async def msg_top(message: Message):
 async def msg_donate(message: Message):
     await cmd_donate(message)
 
+# ===== ACHIEVEMENTS AND BOXES =====
 
+@cmd_user_router.message(Command('achievements'))
+async def cmd_achievements(message: Message):
+    """Меню достижений"""
+    user_id = message.from_user.id
+
+    builder = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💼 Карьера", callback_data="ach_work"),
+         InlineKeyboardButton(text="🛍 Инвестор", callback_data="ach_buy")],
+        [InlineKeyboardButton(text="💸 Трейдер", callback_data="ach_sell"),
+         InlineKeyboardButton(text="🖥 Экспансия", callback_data="ach_expansion")],
+        [InlineKeyboardButton(text="✨ Репутация", callback_data="ach_reputation")]
+    ])
+
+    text = (
+        "🏆 <b>ЗАЛ СЛАВЫ ПК КЛУБА</b>\n\n"
+        "Здесь отмечаются лучшие владельцы клубов!\n"
+        "Выполняй задания и получай эксклюзивные кейсы с наградами.\n\n"
+        "<i>Выбери категорию:</i>"
+    )
+
+    await message.answer(text, reply_markup=builder, parse_mode="HTML")
+
+@callback_router.callback_query(F.data.startswith('ach_'))
+async def cb_achievement_category(callback: CallbackQuery):
+    """Обработчик выбора категории достижений"""
+    user_id = callback.from_user.id
+    category = callback.data.split('_', 1)[1]
+
+    if category == "back":
+        # Возврат в главное меню
+        builder = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💼 Карьера", callback_data="ach_work"),
+             InlineKeyboardButton(text="🛍 Инвестор", callback_data="ach_buy")],
+            [InlineKeyboardButton(text="💸 Трейдер", callback_data="ach_sell"),
+             InlineKeyboardButton(text="🖥 Экспансия", callback_data="ach_expansion")],
+            [InlineKeyboardButton(text="✨ Репутация", callback_data="ach_reputation")]
+        ])
+        text = (
+            "🏆 <b>ЗАЛ СЛАВЫ ПК КЛУБА</b>\n\n"
+            "Здесь отмечаются лучшие владельцы клубов!\n"
+            "Выполняй задания и получай эксклюзивные кейсы с наградами.\n\n"
+            "<i>Выбери категорию:</i>"
+        )
+        await callback.message.edit_text(text, reply_markup=builder, parse_mode="HTML")
+        await callback.answer()
+        return
+
+    # Получаем достижения категории
+    achievements = await get_user_achievements(user_id, category)
+
+    if not achievements:
+        await callback.answer("Достижения не найдены", show_alert=True)
+        return
+
+    # Сначала ищем выполненное но не забранное
+    achievement = None
+    for ach in achievements:
+        if ach['completed'] and not ach['claimed']:
+            achievement = ach
+            break
+
+    # Если нет незабранных, ищем первое невыполненное
+    if achievement is None:
+        for ach in achievements:
+            if not ach['completed']:
+                achievement = ach
+                break
+
+    # Если все выполнены и забраны, показываем последнее
+    if achievement is None:
+        achievement = achievements[-1]
+
+    # Формируем текст
+    category_names = {
+        'work': '💼 КАРЬЕРА',
+        'buy': '🛍 ИНВЕСТОР',
+        'sell': '💸 ТРЕЙДЕР',
+        'expansion': '🖥 ЭКСПАНСИЯ',
+        'reputation': '✨ РЕПУТАЦИЯ'
+    }
+
+    progress = min(100, (achievement['current_value'] / achievement['target_value']) * 100) if achievement['target_value'] > 0 else 0
+    progress_bar = "█" * int(progress / 10) + "░" * (10 - int(progress / 10))
+
+    text = f"🏆 Достижение «{achievement['name']}»:\n\n"
+    text += f"Для выполнения необходимо:\n{achievement['description']}\n\n"
+    text += f"Прогресс выполнения: {achievement['current_value']} / {achievement['target_value']} ({progress:.1f}%)\n"
+    text += f"{progress_bar}\n\n"
+
+    # Награда
+    conn = await Database.get_connection()
+    cursor = await conn.execute('SELECT reward_type, reward_value FROM achievements WHERE id = ?', (achievement['id'],))
+    reward = await cursor.fetchone()
+    if reward:
+        reward_type, reward_value = reward
+        box_names = {
+            'starter_pack': '📦 Starter Pack',
+            'gamer_case': '🎮 Gamer\'s Case',
+            'business_box': '💼 Business Box',
+            'champion_chest': '🏆 Champion Chest',
+            'pro_gear': '🧳 Pro Gear Case',
+            'legend_vault': '👑 Legend\'s Vault',
+            'vip_mystery': '🌟 VIP Mystery Box'
+        }
+        reward_name = box_names.get(reward_type, 'Неизвестно')
+        text += f"Награда за выполнение:\n🎁 {reward_name} x{reward_value}"
+
+    builder = InlineKeyboardMarkup(inline_keyboard=[])
+    buttons = []
+
+    if achievement['completed'] and not achievement['claimed']:
+        buttons.append([InlineKeyboardButton(text="🎁 Забрать награду", callback_data=f"claim_{achievement['id']}_{category}")])
+    elif achievement['completed'] and achievement['claimed']:
+        buttons.append([InlineKeyboardButton(text="✅ Выполнено", callback_data="noop")])
+    else:
+        buttons.append([InlineKeyboardButton(text="❌ Не выполнено", callback_data="noop")])
+
+    buttons.append([InlineKeyboardButton(text="« Назад", callback_data="ach_back")])
+    builder = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback.message.edit_text(text, reply_markup=builder)
+    await callback.answer()
+
+@callback_router.callback_query(F.data.startswith('claim_'))
+async def cb_claim_achievement(callback: CallbackQuery):
+    """Забрать награду за достижение"""
+    user_id = callback.from_user.id
+    parts = callback.data.split('_')
+    achievement_id = int(parts[1])
+    category = parts[2]
+
+    success = await claim_achievement_reward(user_id, achievement_id)
+
+    if success:
+        # Получаем информацию о награде
+        conn = await Database.get_connection()
+        cursor = await conn.execute('SELECT reward_type, reward_value, name FROM achievements WHERE id = ?', (achievement_id,))
+        reward = await cursor.fetchone()
+
+        if reward:
+            reward_type, reward_value, ach_name = reward
+            box_names = {
+                'starter_pack': ('📦 STARTER PACK', '/open_starter'),
+                'gamer_case': ('🎮 GAMER\'S CASE', '/open_gamer'),
+                'business_box': ('💼 BUSINESS BOX', '/open_business'),
+                'champion_chest': ('🏆 CHAMPION CHEST', '/open_champion'),
+                'pro_gear': ('🧳 PRO GEAR', '/open_pro'),
+                'legend_vault': ('👑 LEGEND\'S VAULT', '/open_legend'),
+                'vip_mystery': ('🌟 VIP MYSTERY BOX', '/open_vip')
+            }
+
+            if reward_type in box_names:
+                reward_name, open_command = box_names[reward_type]
+                reward_text = (
+                    f"✅ <b>НАГРАДА ПОЛУЧЕНА!</b>\n\n"
+                    f"🎁 Ты получил:\n"
+                    f"<b>{reward_name} x{reward_value}</b>\n\n"
+                    f"💡 Используй команду <code>{open_command}</code> чтобы открыть бокс!"
+                )
+            else:
+                reward_text = f"✅ <b>НАГРАДА ПОЛУЧЕНА!</b>\n\n🎁 {reward_type} x{reward_value}"
+
+            # Кнопка только "Назад"
+            builder = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="« Назад", callback_data="ach_back")]
+            ])
+
+            # Редактируем текущее сообщение
+            try:
+                await callback.message.edit_text(reward_text, reply_markup=builder, parse_mode="HTML")
+            except Exception:
+                pass
+
+        await callback.answer()
+    else:
+        await callback.answer("❌ Ошибка при получении награды", show_alert=True)
+
+@callback_router.callback_query(F.data == "noop")
+async def cb_noop(callback: CallbackQuery):
+    """Заглушка для неактивных кнопок"""
+    await callback.answer()
+
+@cmd_user_router.message(Command('box'))
+async def cmd_box(message: Message):
+    """Меню боксов"""
+    user_id = message.from_user.id
+    await ensure_user_boxes(user_id)
+
+    conn = await Database.get_connection()
+    cursor = await conn.execute('''
+    SELECT starter_pack, gamer_case, business_box, champion_chest, pro_gear, legend_vault, vip_mystery
+    FROM user_boxes WHERE user_id = ?
+    ''', (user_id,))
+    result = await cursor.fetchone()
+
+    if result:
+        starter, gamer, business, champion, pro, legend, vip = result
+    else:
+        starter, gamer, business, champion, pro, legend, vip = 0, 0, 0, 0, 0, 0, 0
+
+    text = (
+        "🎁 <b>ТВОИ БОКСЫ:</b>\n\n"
+        f"📦 <b>STARTER PACK:</b> {starter} шт\n"
+        f"🎮 <b>GAMER'S CASE:</b> {gamer} шт\n"
+        f"💼 <b>BUSINESS BOX:</b> {business} шт\n"
+        f"🏆 <b>CHAMPION CHEST:</b> {champion} шт\n"
+        f"🧳 <b>PRO GEAR:</b> {pro} шт\n"
+        f"👑 <b>LEGEND'S VAULT:</b> {legend} шт\n"
+        f"🌟 <b>VIP MYSTERY BOX:</b> {vip} шт\n\n"
+        "<i>Используй команды для открытия:\n"
+        "/open_starter, /open_gamer, /open_business,\n"
+        "/open_champion, /open_pro, /open_legend, /open_vip</i>"
+    )
+
+    await message.answer(text, parse_mode="HTML")
+
+async def animate_box_opening(message: Message, box_name: str, reward_type: str, reward_value: int):
+    """Анимация открытия бокса как в CS:GO"""
+    # Эмодзи для разных наград
+    reward_emojis = {
+        "⏱ Заработок ПК": "💵",
+        "💰 Деньги": "💵",
+        "⏱ Работа ПК": "⏱",
+        "🖥 ПК": "🖥",
+        "⚡ Премиум": "⭐",
+        "🤖 Спонсор клуба": "🤖",
+        "🔧 Автоматизация": "🔧",
+        "💰 Игровые деньги": "💵",
+        "⏱ Работа игроков": "⏱",
+        "🖥 Игровой ПК": "🎮",
+        "💰 Бизнес-доход": "💼",
+        "⏱ Рабочее время": "⏰",
+        "🖥 Бизнес ПК": "💻",
+        "💰 Чемпионский приз": "🏆",
+        "⏱ Премиум время": "⌚",
+        "🖥 Элитный ПК": "🖥",
+        "💰 Профессиональный гонорар": "💎",
+        "⏱ Про-время": "⏲",
+        "🖥 Про-комплект ПК": "⚙️",
+        "💰 Легендарное богатство": "👑",
+        "⏱ Легендарное время": "🕐",
+        "🖥 Легендарное оборудование": "🔱",
+        "💰 VIP Jackpot": "🌟",
+        "⏱ VIP Эксклюзив": "💫",
+        "🖥 VIP Ферма": "🏭"
+    }
+
+    # Все возможные эмодзи для прокрутки
+    all_emojis = ["💵", "⏱", "🖥", "⭐", "🤖", "🔧", "💼", "🏆", "💎", "👑"]
+
+    # Получаем эмодзи выигрыша
+    win_emoji = reward_emojis.get(reward_type, "🎁")
+
+    # Начальное сообщение
+    msg = await message.answer(f"🎰 <b>Открываем {box_name}...</b>", parse_mode="HTML")
+
+    # Создаём случайную последовательность для прокрутки
+    import asyncio
+
+    # 8 раундов прокрутки
+    for round_num in range(8):
+        # Генерируем 7 случайных эмодзи
+        items = [random.choice(all_emojis) for _ in range(7)]
+
+        # На последних раундах добавляем выигрышный предмет в центр
+        if round_num >= 5:
+            items[3] = win_emoji
+
+        # Формируем строку прокрутки
+        scroll_line = " ".join(items)
+        animation_text = (
+            f"🎰 <b>Открываем {box_name}...</b>\n\n"
+            f"┌─────────────────────┐\n"
+            f"  {scroll_line}\n"
+            f"└─────────────────────┘\n"
+            f"           ↑"
+        )
+
+        # Замедляем анимацию на последних раундах
+        delay = 0.3 if round_num < 5 else 0.5 if round_num < 7 else 1.0
+
+        try:
+            await msg.edit_text(animation_text, parse_mode="HTML")
+            await asyncio.sleep(delay)
+        except Exception:
+            pass
+
+    # Финальное сообщение с результатом
+    # Форматируем награду понятно
+    if "Заработок" in reward_type:
+        reward_display = f"💵 Заработок ПК: {reward_value} часов"
+    elif "ПК" in reward_type or "оборудование" in reward_type or "Ферма" in reward_type:
+        # Если reward_type уже содержит уровень (из open_box), используем его как есть
+        if "lvl" in reward_type:
+            reward_display = reward_type
+        else:
+            reward_display = f"🖥 ПК: {reward_value} шт"
+    elif "Премиум" in reward_type:
+        reward_display = f"⚡ Премиум: {reward_value} часов"
+    elif "Спонсор" in reward_type:
+        reward_display = f"🤖 Спонсор клуба: {reward_value} часов"
+    elif "Автоматизация" in reward_type:
+        reward_display = f"🔧 Автоматизация: {reward_value} часов"
+    else:
+        reward_display = f"{reward_type}: +{reward_value}"
+
+    final_text = (
+        f"🎉 <b>{box_name} ОТКРЫТ!</b>\n\n"
+        f"🎁 Ты получил:\n"
+        f"<b>{reward_display}</b>"
+    )
+
+    try:
+        await msg.edit_text(final_text, parse_mode="HTML")
+    except Exception:
+        await message.answer(final_text, parse_mode="HTML")
+
+@cmd_user_router.message(Command('open_starter'))
+async def cmd_open_starter(message: Message):
+    """Открыть STARTER PACK"""
+    user_id = message.from_user.id
+
+    # Проверка кулдауна
+    import time
+    current_time = time.time()
+    if user_id in box_cooldowns:
+        time_passed = current_time - box_cooldowns[user_id]
+        if time_passed < BOX_COOLDOWN:
+            remaining = BOX_COOLDOWN - time_passed
+            await message.answer(f"⏳ Подожди {remaining:.1f} сек перед открытием следующего кейса!")
+            return
+
+    # Устанавливаем кулдаун СРАЗУ, чтобы предотвратить спам
+    box_cooldowns[user_id] = current_time
+
+    reward = await open_box(user_id, "starter_pack")
+
+    if reward:
+        reward_type, reward_value, box_name = reward
+        await animate_box_opening(message, box_name, reward_type, reward_value)
+    else:
+        await message.answer("❌ У тебя нет STARTER PACK!")
+
+@cmd_user_router.message(Command('open_gamer'))
+async def cmd_open_gamer(message: Message):
+    """Открыть GAMER'S CASE"""
+    user_id = message.from_user.id
+
+    # Проверка кулдауна
+    import time
+    current_time = time.time()
+    if user_id in box_cooldowns:
+        time_passed = current_time - box_cooldowns[user_id]
+        if time_passed < BOX_COOLDOWN:
+            remaining = BOX_COOLDOWN - time_passed
+            await message.answer(f"⏳ Подожди {remaining:.1f} сек перед открытием следующего кейса!")
+            return
+
+    # Устанавливаем кулдаун СРАЗУ, чтобы предотвратить спам
+    box_cooldowns[user_id] = current_time
+
+    reward = await open_box(user_id, "gamer_case")
+
+    if reward:
+        reward_type, reward_value, box_name = reward
+        await animate_box_opening(message, box_name, reward_type, reward_value)
+    else:
+        await message.answer("❌ У тебя нет GAMER'S CASE!")
+
+@cmd_user_router.message(Command('open_business'))
+async def cmd_open_business(message: Message):
+    """Открыть BUSINESS BOX"""
+    user_id = message.from_user.id
+
+    # Проверка кулдауна
+    import time
+    current_time = time.time()
+    if user_id in box_cooldowns:
+        time_passed = current_time - box_cooldowns[user_id]
+        if time_passed < BOX_COOLDOWN:
+            remaining = BOX_COOLDOWN - time_passed
+            await message.answer(f"⏳ Подожди {remaining:.1f} сек перед открытием следующего кейса!")
+            return
+
+    # Устанавливаем кулдаун СРАЗУ, чтобы предотвратить спам
+    box_cooldowns[user_id] = current_time
+
+    reward = await open_box(user_id, "business_box")
+
+    if reward:
+        reward_type, reward_value, box_name = reward
+        await animate_box_opening(message, box_name, reward_type, reward_value)
+    else:
+        await message.answer("❌ У тебя нет BUSINESS BOX!")
+
+@cmd_user_router.message(Command('open_champion'))
+async def cmd_open_champion(message: Message):
+    """Открыть CHAMPION CHEST"""
+    user_id = message.from_user.id
+
+    # Проверка кулдауна
+    import time
+    current_time = time.time()
+    if user_id in box_cooldowns:
+        time_passed = current_time - box_cooldowns[user_id]
+        if time_passed < BOX_COOLDOWN:
+            remaining = BOX_COOLDOWN - time_passed
+            await message.answer(f"⏳ Подожди {remaining:.1f} сек перед открытием следующего кейса!")
+            return
+
+    # Устанавливаем кулдаун СРАЗУ, чтобы предотвратить спам
+    box_cooldowns[user_id] = current_time
+
+    reward = await open_box(user_id, "champion_chest")
+
+    if reward:
+        reward_type, reward_value, box_name = reward
+        await animate_box_opening(message, box_name, reward_type, reward_value)
+    else:
+        await message.answer("❌ У тебя нет CHAMPION CHEST!")
+
+@cmd_user_router.message(Command('open_pro'))
+async def cmd_open_pro(message: Message):
+    """Открыть PRO GEAR"""
+    user_id = message.from_user.id
+
+    # Проверка кулдауна
+    import time
+    current_time = time.time()
+    if user_id in box_cooldowns:
+        time_passed = current_time - box_cooldowns[user_id]
+        if time_passed < BOX_COOLDOWN:
+            remaining = BOX_COOLDOWN - time_passed
+            await message.answer(f"⏳ Подожди {remaining:.1f} сек перед открытием следующего кейса!")
+            return
+
+    # Устанавливаем кулдаун СРАЗУ, чтобы предотвратить спам
+    box_cooldowns[user_id] = current_time
+
+    reward = await open_box(user_id, "pro_gear")
+
+    if reward:
+        reward_type, reward_value, box_name = reward
+        await animate_box_opening(message, box_name, reward_type, reward_value)
+    else:
+        await message.answer("❌ У тебя нет PRO GEAR!")
+
+@cmd_user_router.message(Command('open_legend'))
+async def cmd_open_legend(message: Message):
+    """Открыть LEGEND'S VAULT"""
+    user_id = message.from_user.id
+
+    # Проверка кулдауна
+    import time
+    current_time = time.time()
+    if user_id in box_cooldowns:
+        time_passed = current_time - box_cooldowns[user_id]
+        if time_passed < BOX_COOLDOWN:
+            remaining = BOX_COOLDOWN - time_passed
+            await message.answer(f"⏳ Подожди {remaining:.1f} сек перед открытием следующего кейса!")
+            return
+
+    # Устанавливаем кулдаун СРАЗУ, чтобы предотвратить спам
+    box_cooldowns[user_id] = current_time
+
+    reward = await open_box(user_id, "legend_vault")
+
+    if reward:
+        reward_type, reward_value, box_name = reward
+        await animate_box_opening(message, box_name, reward_type, reward_value)
+    else:
+        await message.answer("❌ У тебя нет LEGEND'S VAULT!")
+
+@cmd_user_router.message(Command('open_vip'))
+async def cmd_open_vip(message: Message):
+    """Открыть VIP MYSTERY BOX"""
+    user_id = message.from_user.id
+
+    # Проверка кулдауна
+    import time
+    current_time = time.time()
+    if user_id in box_cooldowns:
+        time_passed = current_time - box_cooldowns[user_id]
+        if time_passed < BOX_COOLDOWN:
+            remaining = BOX_COOLDOWN - time_passed
+            await message.answer(f"⏳ Подожди {remaining:.1f} сек перед открытием следующего кейса!")
+            return
+
+    # Устанавливаем кулдаун СРАЗУ, чтобы предотвратить спам
+    box_cooldowns[user_id] = current_time
+
+    reward = await open_box(user_id, "vip_mystery")
+
+    if reward:
+        reward_type, reward_value, box_name = reward
+        await animate_box_opening(message, box_name, reward_type, reward_value)
+    else:
+        await message.answer("❌ У тебя нет VIP MYSTERY BOX!")
 
 # ===== MAIN FUNCTION =====
 async def calculate_income():
@@ -7299,21 +8797,19 @@ async def schedule_income_calculation():
     while True:
         try:
             now = datetime.datetime.now()
-            
-            # Начисление дохода каждые 10 минут
+
+            # Начисление дохода и налогов каждые 10 минут
             if now.minute % 10 == 0 and now.second == 0:
                 logger.info("Starting 10-minute income calculation...")
                 await calculate_income()
                 logger.info("10-minute income calculation completed")
-            
-            # Начисление налогов каждый ровный час (минута 00)
-            if now.minute == 0 and now.second == 0:
-                logger.info("Starting hourly tax calculation...")
+
+                logger.info("Starting 10-minute tax calculation...")
                 await calculate_taxes()
-                logger.info("Hourly tax calculation completed")
-            
+                logger.info("10-minute tax calculation completed")
+
             await asyncio.sleep(1)  # Проверять каждую секунду
-            
+
         except Exception as e:
             logger.error(f"Error in schedule_income_calculation: {e}")
             await asyncio.sleep(60)
@@ -8538,7 +10034,11 @@ async def main():
     # Инициализируем базу данных
     await init_db()
     print("Database initialized successfully")
-    
+
+    # Инициализируем достижения
+    await initialize_achievements()
+    print("Achievements initialized successfully")
+
     # Устанавливаем время старта бота
     bot.start_time = datetime.datetime.now()
     
