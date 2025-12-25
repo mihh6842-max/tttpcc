@@ -16,7 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
-TOKEN = "8525204431:AAE9emMJ-6R1m93ty9bC5StJwt-lRgd4ETA"
+TOKEN = "7574504052:AAGuScWo3tKbj_NvT7B28LT-wCQXUhw75vE"
 PCCLUB = -1003246180665 
 ADMIN = [5929120983, 963551489, 8315604670, 7453830377, 7338817463]
 PAYMENT_TOKEN = "goida"
