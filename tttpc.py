@@ -1193,11 +1193,15 @@ async def check_achievements(user_id: int, category: str):
             VALUES (?, ?, 0)
             ''', (user_id, ach_id))
 
-            # Обновляем прогресс
+            # Обновляем прогресс (не сбрасываем completed если уже выполнено)
             completed = 1 if current_value >= target else 0
             await conn.execute('''
             UPDATE user_achievements
-            SET current_value = ?, completed = ?
+            SET current_value = ?,
+                completed = CASE
+                    WHEN completed = 1 THEN 1
+                    ELSE ?
+                END
             WHERE user_id = ? AND achievement_id = ?
             ''', (current_value, completed, user_id, ach_id))
 
@@ -1967,7 +1971,10 @@ async def do_expansion(user_id: int) -> bool:
             'UPDATE stats SET expansion_level = ? WHERE userid = ?',
             (new_expansion_level, user_id)
         )
-        
+
+        # Обновляем достижения за экспансию
+        await update_user_achievement_stat(user_id, 'expansion', new_expansion_level)
+
         # Сбрасываем прогресс пользователя (вайп): баланс 5000$, комната 1, компьютеры 0
         # Сбрасываем улучшения, налоги, доход
         await execute_update(
