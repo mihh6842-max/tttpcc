@@ -1060,10 +1060,51 @@ async def ensure_user_achievement_stats(user_id: int):
     """Убедиться, что у пользователя есть запись статистики"""
     try:
         conn = await Database.get_connection()
-        cursor = await conn.execute('SELECT user_id FROM user_achievement_stats WHERE user_id = ?', (user_id,))
-        if not await cursor.fetchone():
-            await conn.execute('INSERT INTO user_achievement_stats (user_id) VALUES (?)', (user_id,))
+
+        # Получаем текущий expansion_level и reputation из stats
+        cursor = await conn.execute('SELECT expansion_level, reputation FROM stats WHERE userid = ?', (user_id,))
+        stats = await cursor.fetchone()
+        expansion_level = stats[0] if stats and stats[0] else 0
+        reputation_level = stats[1] if stats and stats[1] else 1
+
+        # Проверяем есть ли запись в user_achievement_stats
+        cursor = await conn.execute('SELECT max_expansion_level, max_reputation_level FROM user_achievement_stats WHERE user_id = ?', (user_id,))
+        ach_stats = await cursor.fetchone()
+
+        if not ach_stats:
+            # Создаем новую запись с текущими значениями
+            await conn.execute('''
+                INSERT INTO user_achievement_stats (user_id, max_expansion_level, max_reputation_level)
+                VALUES (?, ?, ?)
+            ''', (user_id, expansion_level, reputation_level))
             await conn.commit()
+
+            # Проверяем достижения если есть прогресс
+            if expansion_level > 0:
+                await check_achievements(user_id, 'expansion')
+            if reputation_level > 1:
+                await check_achievements(user_id, 'reputation')
+        else:
+            # Синхронизируем значения если они отличаются (для старых пользователей)
+            current_max_expansion = ach_stats[0] if ach_stats[0] else 0
+            current_max_reputation = ach_stats[1] if ach_stats[1] else 1
+
+            need_update = False
+            if expansion_level > current_max_expansion:
+                await conn.execute('UPDATE user_achievement_stats SET max_expansion_level = ? WHERE user_id = ?', (expansion_level, user_id))
+                need_update = True
+            if reputation_level > current_max_reputation:
+                await conn.execute('UPDATE user_achievement_stats SET max_reputation_level = ? WHERE user_id = ?', (reputation_level, user_id))
+                need_update = True
+
+            if need_update:
+                await conn.commit()
+                # Проверяем достижения заново
+                if expansion_level > current_max_expansion:
+                    await check_achievements(user_id, 'expansion')
+                if reputation_level > current_max_reputation:
+                    await check_achievements(user_id, 'reputation')
+
     except Exception as e:
         logging.error(f"Error ensuring user achievement stats: {e}")
 
@@ -1167,6 +1208,9 @@ async def check_achievements(user_id: int, category: str):
 async def get_user_achievements(user_id: int, category: str):
     """Получить достижения пользователя по категории"""
     try:
+        # Убеждаемся что статистика пользователя инициализирована (миграция для старых пользователей)
+        await ensure_user_achievement_stats(user_id)
+
         conn = await Database.get_connection()
         cursor = await conn.execute('''
         SELECT a.id, a.name, a.description, a.target_value,
@@ -8656,15 +8700,18 @@ async def process_auto_boosters():
                             (reward, user_id)
                         )
                         await execute_update('''
-                            UPDATE user_work_stats 
+                            UPDATE user_work_stats
                             SET exp = exp + 1, last_work = ?, total_earned = total_earned + ?
                             WHERE user_id = ?
                         ''', (datetime.datetime.now().isoformat(), reward, user_id))
-                        
+
+                        # Обновляем достижения за работу
+                        await update_user_achievement_stat(user_id, 'work', 1)
+
                         # Добавляем репутацию за автоматическую работу
                         rep_points = max_job['id']
                         await add_reputation(user_id, rep_points, "auto_work")
-                        
+
                         logger.info(f"Auto-work completed for user {user_id}: {max_job['name']} (+{reward}$)")
         
     except Exception as e:
