@@ -700,8 +700,17 @@ async def init_db():
             banned_by INTEGER,
             reason TEXT DEFAULT "Запрет на создание франшиз"
         )
-    ''')    
-    
+    ''')
+
+    await conn.execute('''
+        CREATE TABLE IF NOT EXISTS banned_users (
+            user_id INTEGER PRIMARY KEY,
+            banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            banned_by INTEGER,
+            reason TEXT DEFAULT "Глобальный бан"
+        )
+    ''')
+
     await conn.execute('''
         CREATE TABLE IF NOT EXISTS pc (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -993,6 +1002,13 @@ async def execute_update(query, params=()):
     conn = await Database.get_connection()
     await conn.execute(query, params)
     await conn.commit()
+
+async def check_ban(user_id: int) -> tuple[bool, str]:
+    """Проверка на глобальный бан. Возвращает (забанен?, причина)"""
+    banned = await execute_query_one('SELECT reason FROM banned_users WHERE user_id = ?', (user_id,))
+    if banned:
+        return True, banned[0]
+    return False, ""
 
 # ============== СИСТЕМА ДОСТИЖЕНИЙ И БОКСОВ ==============
 
@@ -1555,6 +1571,39 @@ class Rename(StatesGroup):
 # ===== BOT INITIALIZATION =====
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# ===== MIDDLEWARE ДЛЯ ПРОВЕРКИ БАНА =====
+@dp.update.outer_middleware()
+async def ban_check_middleware(handler, event, data):
+    """Middleware для проверки глобального бана пользователя"""
+    # Получаем user_id из event
+    user_id = None
+    if hasattr(event, 'from_user') and event.from_user:
+        user_id = event.from_user.id
+    elif hasattr(event, 'message') and event.message and hasattr(event.message, 'from_user'):
+        user_id = event.message.from_user.id
+
+    # Если нашли user_id, проверяем бан (кроме админов)
+    if user_id and user_id not in ADMIN:
+        is_banned, reason = await check_ban(user_id)
+        if is_banned:
+            # Пытаемся отправить сообщение о бане
+            try:
+                if hasattr(event, 'answer'):
+                    await event.answer(
+                        f'🚫 Вы заблокированы\nПричина: {reason}\n\nВы не можете использовать бота.',
+                        show_alert=True
+                    )
+                elif hasattr(event, 'message'):
+                    await event.message.answer(
+                        f'🚫 Вы заблокированы\nПричина: {reason}\n\nВы не можете использовать бота.'
+                    )
+            except:
+                pass
+            return  # Прерываем обработку
+
+    # Если не забанен, продолжаем обработку
+    return await handler(event, data)
 
 # Кулдаун для покупок ПК (1.5 секунды между покупками)
 buy_cooldowns = {}
@@ -5961,6 +6010,111 @@ async def cmd_test_auto_promo(message: Message):
 
     except Exception as e:
         logger.error(f"Error in test_auto_promo: {e}")
+        await message.answer(f'❌ Ошибка: {str(e)}')
+
+@cmd_admin_router.message(Command('ban'))
+async def cmd_ban(message: Message):
+    """Глобальный бан пользователя (только для админов)"""
+    if message.from_user.id not in ADMIN:
+        await message.answer('❌ Недостаточно прав')
+        return
+
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            await message.answer('⚠️ Используйте: /ban (ID пользователя) [причина]')
+            return
+
+        user_id = int(args[1])
+        reason = ' '.join(args[2:]) if len(args) > 2 else "Глобальный бан"
+
+        if user_id in ADMIN:
+            await message.answer('❌ Нельзя забанить администратора')
+            return
+
+        # Проверяем, не забанен ли уже
+        banned = await execute_query_one('SELECT user_id FROM banned_users WHERE user_id = ?', (user_id,))
+        if banned:
+            await message.answer('⚠️ Пользователь уже забанен')
+            return
+
+        # Баним пользователя
+        await execute_update(
+            'INSERT INTO banned_users (user_id, banned_by, reason) VALUES (?, ?, ?)',
+            (user_id, message.from_user.id, reason)
+        )
+
+        # Обнуляем все данные пользователя
+        await execute_update('DELETE FROM stats WHERE userid = ?', (user_id,))
+        await execute_update('DELETE FROM pc WHERE userid = ?', (user_id,))
+        await execute_update('DELETE FROM orders WHERE user_id = ?', (user_id,))
+        await execute_update('DELETE FROM user_work_stats WHERE user_id = ?', (user_id,))
+        await execute_update('DELETE FROM user_achievement_stats WHERE user_id = ?', (user_id,))
+
+        await message.answer(
+            f'✅ Пользователь {user_id} забанен\n'
+            f'Причина: {reason}\n'
+            f'Все данные удалены'
+        )
+
+        # Уведомляем пользователя
+        try:
+            await bot.send_message(
+                user_id,
+                f'🚫 Вы заблокированы\n'
+                f'Причина: {reason}\n\n'
+                f'Все ваши данные удалены. Вы не можете использовать бота.'
+            )
+        except:
+            pass
+
+    except ValueError:
+        await message.answer('❌ ID должен быть числом')
+    except Exception as e:
+        logger.error(f"Error in cmd_ban: {e}")
+        await message.answer(f'❌ Ошибка: {str(e)}')
+
+@cmd_admin_router.message(Command('unban'))
+async def cmd_unban(message: Message):
+    """Разбан пользователя (только для админов)"""
+    if message.from_user.id not in ADMIN:
+        await message.answer('❌ Недостаточно прав')
+        return
+
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            await message.answer('⚠️ Используйте: /unban (ID пользователя)')
+            return
+
+        user_id = int(args[1])
+
+        # Проверяем, забанен ли пользователь
+        banned = await execute_query_one('SELECT user_id, reason FROM banned_users WHERE user_id = ?', (user_id,))
+        if not banned:
+            await message.answer('⚠️ Пользователь не забанен')
+            return
+
+        # Разбаниваем
+        await execute_update('DELETE FROM banned_users WHERE user_id = ?', (user_id,))
+
+        await message.answer(f'✅ Пользователь {user_id} разбанен')
+
+        # Уведомляем пользователя
+        try:
+            await bot.send_message(
+                user_id,
+                '✅ Вы разблокированы!\n'
+                'Теперь вы можете снова использовать бота.\n'
+                'Начните с /start'
+            )
+        except:
+            pass
+
+    except ValueError:
+        await message.answer('❌ ID должен быть числом')
+    except Exception as e:
+        logger.error(f"Error in cmd_unban: {e}")
         await message.answer(f'❌ Ошибка: {str(e)}')
 
 # ===== NETWORK CALLBACK HANDLERS =====
