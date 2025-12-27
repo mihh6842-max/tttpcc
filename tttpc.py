@@ -1573,34 +1573,47 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 # ===== MIDDLEWARE ДЛЯ ПРОВЕРКИ БАНА =====
+async def check_ban_middleware_func(user_id: int) -> tuple[bool, str]:
+    """Проверка бана для middleware"""
+    try:
+        banned = await execute_query_one('SELECT reason FROM banned_users WHERE user_id = ?', (user_id,))
+        if banned:
+            return True, banned[0]
+        return False, ""
+    except:
+        return False, ""
+
 @dp.update.outer_middleware()
 async def ban_check_middleware(handler, event, data):
     """Middleware для проверки глобального бана пользователя"""
-    # Получаем user_id из event
-    user_id = None
-    if hasattr(event, 'from_user') and event.from_user:
-        user_id = event.from_user.id
-    elif hasattr(event, 'message') and event.message and hasattr(event.message, 'from_user'):
-        user_id = event.message.from_user.id
+    try:
+        # Получаем user_id из event
+        user_id = None
+        if hasattr(event, 'from_user') and event.from_user:
+            user_id = event.from_user.id
+        elif hasattr(event, 'message') and event.message and hasattr(event.message, 'from_user'):
+            user_id = event.message.from_user.id
 
-    # Если нашли user_id, проверяем бан (кроме админов)
-    if user_id and user_id not in ADMIN:
-        is_banned, reason = await check_ban(user_id)
-        if is_banned:
-            # Пытаемся отправить сообщение о бане
-            try:
-                if hasattr(event, 'answer'):
-                    await event.answer(
-                        f'🚫 Вы заблокированы\nПричина: {reason}\n\nВы не можете использовать бота.',
-                        show_alert=True
-                    )
-                elif hasattr(event, 'message'):
-                    await event.message.answer(
-                        f'🚫 Вы заблокированы\nПричина: {reason}\n\nВы не можете использовать бота.'
-                    )
-            except:
-                pass
-            return  # Прерываем обработку
+        # Если нашли user_id, проверяем бан (кроме админов)
+        if user_id and user_id not in ADMIN:
+            is_banned, reason = await check_ban_middleware_func(user_id)
+            if is_banned:
+                # Пытаемся отправить сообщение о бане
+                try:
+                    if hasattr(event, 'answer'):
+                        await event.answer(
+                            f'🚫 Вы заблокированы\nПричина: {reason}\n\nВы не можете использовать бота.',
+                            show_alert=True
+                        )
+                    elif hasattr(event, 'message'):
+                        await event.message.answer(
+                            f'🚫 Вы заблокированы\nПричина: {reason}\n\nВы не можете использовать бота.'
+                        )
+                except:
+                    pass
+                return  # Прерываем обработку
+    except:
+        pass
 
     # Если не забанен, продолжаем обработку
     return await handler(event, data)
