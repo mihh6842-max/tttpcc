@@ -17,11 +17,15 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 TOKEN = "7574504052:AAGuScWo3tKbj_NvT7B28LT-wCQXUhw75vE"
-PCCLUB = -1003246180665 
+PCCLUB = -1003246180665
 ADMIN = [5929120983, 963551489, 8315604670, 7453830377, 7338817463]
 PAYMENT_TOKEN = "goida"
 
-DB_FILE = "2pcclub.db"
+# Создаем папку для БД
+import os
+os.makedirs('data', exist_ok=True)
+
+DB_FILE = "data/2pcclub.db"
 
 prices = [
     [1, 5, 3600],
@@ -1077,11 +1081,15 @@ async def ensure_user_achievement_stats(user_id: int):
     try:
         conn = await Database.get_connection()
 
-        # Получаем текущий expansion_level и reputation из stats
-        cursor = await conn.execute('SELECT expansion_level, reputation FROM stats WHERE userid = ?', (user_id,))
+        # Получаем текущий expansion_level из stats
+        cursor = await conn.execute('SELECT expansion_level FROM stats WHERE userid = ?', (user_id,))
         stats = await cursor.fetchone()
         expansion_level = stats[0] if stats and stats[0] else 0
-        reputation_level = stats[1] if stats and stats[1] else 1
+
+        # Получаем reputation_level из user_reputation
+        cursor = await conn.execute('SELECT reputation_level FROM user_reputation WHERE user_id = ?', (user_id,))
+        rep_stats = await cursor.fetchone()
+        reputation_level = rep_stats[0] if rep_stats and rep_stats[0] else 1
 
         # Проверяем есть ли запись в user_achievement_stats
         cursor = await conn.execute('SELECT max_expansion_level, max_reputation_level FROM user_achievement_stats WHERE user_id = ?', (user_id,))
@@ -8882,6 +8890,9 @@ async def process_auto_boosters():
                         # Обновляем достижения за работу
                         await update_user_achievement_stat(user_id, 'work', 1)
 
+                        # Обновляем батл пасс за работу
+                        await update_bp_progress(user_id, 'work', 1)
+
                         # Добавляем репутацию за автоматическую работу
                         rep_points = max_job['id']
                         await add_reputation(user_id, rep_points, "auto_work")
@@ -10097,7 +10108,18 @@ async def post_weekly_results():
             text,
             parse_mode='HTML'
         )
-        
+
+        # Также публикуем в PCClub_News
+        try:
+            await bot.send_message(
+                "@PCClub_News",
+                text,
+                parse_mode='HTML'
+            )
+            logger.info("Weekly results also posted to @PCClub_News")
+        except Exception as e:
+            logger.error(f"Failed to post weekly results to @PCClub_News: {e}")
+
         logger.info("Weekly results posted successfully")
         return True
         
@@ -10117,6 +10139,11 @@ async def schedule_weekly_results():
     """
     logger.info("Weekly results scheduler started (3-phase schedule)")
 
+    # Сохраняем данные между фазами для итогового поста
+    weekly_stats = None
+    weekly_winners = []
+    weekly_used_positions = set()
+
     while True:
         try:
             now = datetime.datetime.now()
@@ -10132,6 +10159,9 @@ async def schedule_weekly_results():
 
                     # Получаем статистику ДО сброса
                     stats = await calculate_weekly_stats()
+                    weekly_stats = stats  # Сохраняем для итогового поста
+                    weekly_winners = []  # Очищаем
+                    weekly_used_positions = set()
 
                     if stats:
                         # Выдаем премиум топ-10
@@ -10181,6 +10211,10 @@ async def schedule_weekly_results():
                                 logger.error(f"Error sending premium notification to admin {admin_id}: {e}")
 
                         logger.info(f"Premium awarded to {len(winners)} franchises")
+
+                        # Сохраняем для итогового поста
+                        weekly_winners = winners
+                        weekly_used_positions = used_positions
 
                     # Ждем 61 секунду до следующей фазы
                     await asyncio.sleep(61)
@@ -10235,6 +10269,78 @@ async def schedule_weekly_results():
                                 logger.error(f"Error sending promo to admin {admin_id}: {e}")
                     else:
                         logger.error("Failed to create weekly promo")
+
+                    # Публикуем итоги недели в каналы
+                    if weekly_stats:
+                        text = f"🏆 <b>ИТОГИ НЕДЕЛИ ({weekly_stats['week_end']})</b>\n\n"
+
+                        # Общая статистика
+                        text += f"📊 <b>Общая статистика:</b>\n"
+                        text += f"👥 Всего игроков: {weekly_stats['total_users']}\n"
+                        text += f"🌐 Всего франшиз: {weekly_stats['total_franchises']}\n"
+                        text += f"💰 Суммарный доход франшиз: {format_number_short(weekly_stats['total_franchise_income'], True)}$\n\n"
+
+                        # Топ франшиз
+                        text += "🏅 <b>ТОП-10 ФРАНШИЗ:</b>\n"
+                        for i, franchise in enumerate(weekly_stats['top_franchises'][:10], 1):
+                            franchise_name = franchise[0] if franchise[0] else "Без названия"
+                            franchise_income = franchise[1]
+
+                            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+
+                            # Добавляем метку PREMIUM для победителей
+                            is_winner = (i-1) in weekly_used_positions
+                            winner_mark = " 🎁" if is_winner else ""
+
+                            text += f"{medal} <b>{franchise_name}</b>{winner_mark}\n"
+                            text += f"   💰 {format_number_short(franchise_income, True)}$\n"
+
+                            # Добавляем лучшего участника
+                            for member_info in weekly_stats['top_members_by_franchise']:
+                                if member_info['franchise_id'] == franchise[2]:
+                                    text += f"   👤 Лучший: {member_info['member_name']} ({format_number_short(member_info['member_income'], True)}$)\n"
+                                    break
+
+                            text += "\n"
+
+                        # Информация о победителях
+                        if weekly_winners:
+                            text += "🎉 <b>ПОБЕДИТЕЛИ (PREMIUM):</b>\n"
+                            for winner in weekly_winners:
+                                text += f"🏆 {winner['position']} место: {winner['franchise_name']} (+{winner['days']} дней)\n"
+                            text += "\n"
+
+                        # Промокод
+                        if promo_code:
+                            text += f"🎁 <b>ЕЖЕНЕДЕЛЬНЫЙ ПРОМОКОД:</b>\n"
+                            text += f"🔑 Код: <code>{promo_code}</code>\n"
+                            text += f"💰 Награда: Доход фермы за {promo_hours} часов\n"
+                            text += f"👥 Активаций: {promo_activations}\n"
+                            text += f"📝 Активировать: /promo {promo_code}\n\n"
+
+                        # Правила на следующую неделю
+                        text += "📢 <b>ПРАВИЛА НА СЛЕДУЩУЮ НЕДЕЛЮ:</b>\n"
+                        text += "• 8-е место получает PREMIUM гарантированно\n"
+                        text += "• +2 случайные франшизы из топ-10\n"
+                        text += "• Доход франшиз обнуляется каждую неделю\n"
+                        text += "• Новый промокод после каждого топа\n\n"
+
+                        text += "⏰ <b>Следующие итоги:</b> Воскресенье, 18:00 по МСК\n"
+                        text += "🔥 Участвуйте и побеждайте!"
+
+                        # Отправляем в основной канал
+                        try:
+                            await bot.send_message(CHANNEL_ID, text, parse_mode='HTML')
+                            logger.info("Weekly results posted to main channel")
+                        except Exception as e:
+                            logger.error(f"Failed to post weekly results to main channel: {e}")
+
+                        # Отправляем в PCClub_News
+                        try:
+                            await bot.send_message("@PCClub_News", text, parse_mode='HTML')
+                            logger.info("Weekly results posted to @PCClub_News")
+                        except Exception as e:
+                            logger.error(f"Failed to post weekly results to @PCClub_News: {e}")
 
                     # Ждем до конца дня, чтобы не запускать повторно
                     await asyncio.sleep(24 * 3600)
