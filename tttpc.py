@@ -3242,6 +3242,66 @@ async def cmd_give_all_boxes(message: Message):
         logger.error(f"Error in give_all_boxes: {e}")
         await message.answer('❌ Ошибка при выдаче кейсов')
 
+@cmd_admin_router.message(Command('test_box'))
+async def cmd_test_box(message: Message):
+    """Быстро открыть бокс для теста (админ)"""
+    if message.from_user.id not in ADMIN:
+        await message.answer('❌ Недостаточно прав')
+        return
+
+    text_parts = message.text.split(' ')
+
+    if len(text_parts) != 2:
+        await message.answer(
+            '⚠️ Используйте: /test_box (тип_бокса)\n\n'
+            '*Типы боксов:*\n'
+            '• starter_pack\n'
+            '• gamer_case\n'
+            '• business_box\n'
+            '• champion_chest\n'
+            '• pro_gear\n'
+            '• legend_vault\n'
+            '• vip_mystery\n\n'
+            '*Пример:*\n'
+            '`/test_box vip_mystery`',
+            parse_mode='Markdown'
+        )
+        return
+
+    box_type = text_parts[1].lower()
+
+    # Проверка типа бокса
+    valid_boxes = ['starter_pack', 'gamer_case', 'business_box', 'champion_chest', 'pro_gear', 'legend_vault', 'vip_mystery']
+    if box_type not in valid_boxes:
+        await message.answer(f'❌ Неверный тип бокса. Доступные: {", ".join(valid_boxes)}')
+        return
+
+    try:
+        # Открываем бокс без проверки наличия (для теста)
+        user_id = message.from_user.id
+
+        # Временно добавляем бокс
+        await ensure_user_boxes(user_id)
+        await execute_update(
+            f'UPDATE user_boxes SET {box_type} = {box_type} + 1 WHERE user_id = ?',
+            (user_id,)
+        )
+
+        # Открываем
+        reward = await open_box(user_id, box_type)
+
+        if reward:
+            reward_type, reward_value, box_name = reward
+            await animate_box_opening(message, box_name, reward_type, reward_value)
+        else:
+            await message.answer("❌ Ошибка открытия бокса")
+
+        logger.info(f"Admin {message.from_user.id} tested box {box_type}")
+
+    except Exception as e:
+        logger.error(f"Error in test_box: {e}")
+        await message.answer('❌ Ошибка при открытии бокса')
+
 @cmd_admin_router.message(Command('complete_achievement'))
 async def cmd_complete_achievement(message: Message):
     """Выполнить достижение для пользователя"""
