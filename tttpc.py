@@ -1058,6 +1058,50 @@ async def initialize_achievements():
         ("🔥 Знаменитый", "Достичь 7 уровня репутации", "reputation", 7, "champion_chest", 2),
         ("💎 Икона", "Достичь 9 уровня репутации", "reputation", 9, "pro_gear", 1),
         ("👑 Легенда", "Достичь 10 уровня репутации", "reputation", 10, "legend_vault", 1),
+
+        # 🎁 БОКСЫ - Достижения за открытие боксов
+
+        # 📦 STARTER PACK
+        ("🎁 Первые шаги", "Открыть 10 📦 STARTER PACK", "boxes_starter", 10, "starter_pack", 1),
+        ("🎁 Коллекционер стартеров", "Открыть 25 📦 STARTER PACK", "boxes_starter", 25, "starter_pack", 5),
+        ("🎁 Мастер стартов", "Открыть 50 📦 STARTER PACK", "boxes_starter", 50, "gamer_case", 3),
+        ("🎁 Легенда стартеров", "Открыть 100 📦 STARTER PACK", "boxes_starter", 100, "business_box", 1),
+
+        # 🎮 GAMER'S CASE
+        ("🎮 Начинающий геймер", "Открыть 10 🎮 GAMER'S CASE", "boxes_gamer", 10, "gamer_case", 1),
+        ("🎮 Опытный геймер", "Открыть 25 🎮 GAMER'S CASE", "boxes_gamer", 25, "gamer_case", 5),
+        ("🎮 Про-геймер", "Открыть 50 🎮 GAMER'S CASE", "boxes_gamer", 50, "business_box", 3),
+        ("🎮 Геймер-легенда", "Открыть 100 🎮 GAMER'S CASE", "boxes_gamer", 100, "champion_chest", 1),
+
+        # 💼 BUSINESS BOX
+        ("💼 Начинающий бизнесмен", "Открыть 10 💼 BUSINESS BOX", "boxes_business", 10, "business_box", 1),
+        ("💼 Деловой партнер", "Открыть 25 💼 BUSINESS BOX", "boxes_business", 25, "business_box", 5),
+        ("💼 Бизнес-магнат", "Открыть 50 💼 BUSINESS BOX", "boxes_business", 50, "champion_chest", 3),
+        ("💼 Король бизнеса", "Открыть 100 💼 BUSINESS BOX", "boxes_business", 100, "pro_gear", 1),
+
+        # 🏆 CHAMPION CHEST
+        ("🏆 Начинающий чемпион", "Открыть 10 🏆 CHAMPION CHEST", "boxes_champion", 10, "champion_chest", 1),
+        ("🏆 Чемпион-коллекционер", "Открыть 25 🏆 CHAMPION CHEST", "boxes_champion", 25, "champion_chest", 5),
+        ("🏆 Великий чемпион", "Открыть 50 🏆 CHAMPION CHEST", "boxes_champion", 50, "pro_gear", 3),
+        ("🏆 Легендарный чемпион", "Открыть 100 🏆 CHAMPION CHEST", "boxes_champion", 100, "legend_vault", 5),
+
+        # 🧳 PRO GEAR
+        ("🧳 Начинающий профи", "Открыть 10 🧳 PRO GEAR", "boxes_pro", 10, "pro_gear", 1),
+        ("🧳 Опытный профи", "Открыть 25 🧳 PRO GEAR", "boxes_pro", 25, "pro_gear", 5),
+        ("🧳 Мастер профессионал", "Открыть 50 🧳 PRO GEAR", "boxes_pro", 50, "legend_vault", 1),
+        ("🧳 Легенда профи", "Открыть 100 🧳 PRO GEAR", "boxes_pro", 100, "legend_vault", 3),
+
+        # 👑 LEGEND'S VAULT
+        ("👑 Начинающая легенда", "Открыть 10 👑 LEGEND'S VAULT", "boxes_legend", 10, "legend_vault", 1),
+        ("👑 Легенда-коллекционер", "Открыть 25 👑 LEGEND'S VAULT", "boxes_legend", 25, "legend_vault", 5),
+        ("👑 Великая легенда", "Открыть 50 👑 LEGEND'S VAULT", "boxes_legend", 50, "vip_mystery", 1),
+        ("👑 Бессмертная легенда", "Открыть 100 👑 LEGEND'S VAULT", "boxes_legend", 100, "vip_mystery", 3),
+
+        # 🌟 VIP MYSTERY BOX
+        ("🌟 VIP-новичок", "Открыть 10 🌟 VIP MYSTERY BOX", "boxes_vip", 10, "vip_mystery", 1),
+        ("🌟 VIP-коллекционер", "Открыть 25 🌟 VIP MYSTERY BOX", "boxes_vip", 25, "vip_mystery", 3),
+        ("🌟 VIP-магнат", "Открыть 50 🌟 VIP MYSTERY BOX", "boxes_vip", 50, "vip_mystery", 5),
+        ("🌟 VIP-император", "Открыть 100 🌟 VIP MYSTERY BOX", "boxes_vip", 100, "vip_mystery", 10),
     ]
 
     try:
@@ -1065,14 +1109,34 @@ async def initialize_achievements():
         cursor = await conn.execute('SELECT COUNT(*) FROM achievements')
         count = (await cursor.fetchone())[0]
 
-        if count == 0:
-            for achievement in achievements_data:
+        # Добавляем только новые достижения (по category)
+        existing_categories = set()
+        cursor = await conn.execute('SELECT DISTINCT category FROM achievements')
+        async for row in cursor:
+            existing_categories.add(row[0])
+
+        added = 0
+        for achievement in achievements_data:
+            category = achievement[2]  # category is 3rd element
+            # Проверяем есть ли уже достижения этой категории
+            cursor = await conn.execute(
+                'SELECT COUNT(*) FROM achievements WHERE category = ? AND target_value = ?',
+                (category, achievement[3])
+            )
+            exists = (await cursor.fetchone())[0] > 0
+
+            if not exists:
                 await conn.execute('''
                 INSERT INTO achievements (name, description, category, target_value, reward_type, reward_value)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ''', achievement)
+                added += 1
+
+        if added > 0:
             await conn.commit()
-            logging.info("Achievements initialized successfully")
+            logging.info(f"Added {added} new achievements")
+        elif count == 0:
+            logging.info("No achievements to add")
     except Exception as e:
         logging.error(f"Error initializing achievements: {e}")
 
@@ -1152,7 +1216,14 @@ async def update_user_achievement_stat(user_id: int, stat_type: str, value: int 
         'buy': 'total_buy_count',
         'sell': 'total_sell_count',
         'expansion': 'max_expansion_level',
-        'reputation': 'max_reputation_level'
+        'reputation': 'max_reputation_level',
+        'boxes_starter': 'starter_pack_opened',
+        'boxes_gamer': 'gamer_case_opened',
+        'boxes_business': 'business_box_opened',
+        'boxes_champion': 'champion_chest_opened',
+        'boxes_pro': 'pro_gear_opened',
+        'boxes_legend': 'legend_vault_opened',
+        'boxes_vip': 'vip_mystery_opened'
     }
 
     column = stat_mapping.get(stat_type)
@@ -1189,7 +1260,14 @@ async def check_achievements(user_id: int, category: str):
         'buy': 'total_buy_count',
         'sell': 'total_sell_count',
         'expansion': 'max_expansion_level',
-        'reputation': 'max_reputation_level'
+        'reputation': 'max_reputation_level',
+        'boxes_starter': 'starter_pack_opened',
+        'boxes_gamer': 'gamer_case_opened',
+        'boxes_business': 'business_box_opened',
+        'boxes_champion': 'champion_chest_opened',
+        'boxes_pro': 'pro_gear_opened',
+        'boxes_legend': 'legend_vault_opened',
+        'boxes_vip': 'vip_mystery_opened'
     }
 
     column = stat_mapping.get(category)
@@ -1337,69 +1415,78 @@ async def open_box(user_id: int, box_type: str):
         box_config = {
             "starter_pack": {
                 "rewards": [
-                    ("⏱ Заработок ПК", 80, lambda: random.randint(1, 6)),  # 1-6 часов
-                    ("🖥 ПК", 18.5, lambda: 1),
-                    ("⚡ Премиум", 0.5, lambda: random.randint(1, 12)),
+                    ("⏱ Макс доход игрока", 90, lambda: random.randint(1, 6)),  # 90% шанс
+                    ("⏱ Заработок ПК", 9, lambda: random.randint(1, 6)),  # 9% шанс
+                    ("🖥 ПК", 0.9, lambda: 1),  # 0.9% шанс
+                    ("⚡ Премиум", 0.033, lambda: random.randint(1, 3)),  # 0.1%/3 шанс
+                    ("🤖 Спонсор клуба", 0.033, lambda: random.randint(1, 3)),
+                    ("🔧 Автоматизация", 0.034, lambda: random.randint(1, 3)),
                 ],
                 "name": "📦 STARTER PACK"
             },
             "gamer_case": {
                 "rewards": [
-                    ("⏱ Заработок ПК", 62, lambda: random.randint(3, 12)),  # 3-12 часов
-                    ("🖥 Игровой ПК", 31, lambda: 1),
-                    ("⚡ Премиум", 2, lambda: random.randint(1, 32)),
-                    ("🤖 Спонсор клуба", 2, lambda: random.randint(1, 32)),
-                    ("🔧 Автоматизация", 2, lambda: random.randint(1, 32)),
+                    ("⏱ Макс доход игрока", 80, lambda: random.randint(1, 12)),  # 80% шанс
+                    ("⏱ Заработок ПК", 19, lambda: random.randint(1, 12)),  # 19% шанс
+                    ("🖥 Игровой ПК", 0.7, lambda: 1),  # 0.7% шанс
+                    ("⚡ Премиум", 0.1, lambda: random.randint(1, 12)),  # 0.3%/3 шанс
+                    ("🤖 Спонсор клуба", 0.1, lambda: random.randint(1, 12)),
+                    ("🔧 Автоматизация", 0.1, lambda: random.randint(1, 12)),
                 ],
                 "name": "🎮 GAMER'S CASE"
             },
             "business_box": {
                 "rewards": [
-                    ("⏱ Заработок ПК", 62, lambda: random.randint(6, 18)),  # 6-18 часов
-                    ("🖥 Бизнес ПК", 31, lambda: random.randint(1, 2)),
-                    ("⚡ Премиум", 2, lambda: random.randint(1, 32)),
-                    ("🤖 Спонсор клуба", 2, lambda: random.randint(1, 32)),
-                    ("🔧 Автоматизация", 2, lambda: random.randint(1, 32)),
+                    ("⏱ Макс доход игрока", 70, lambda: random.randint(1, 24)),  # 70% шанс
+                    ("⏱ Заработок ПК", 25, lambda: random.randint(1, 24)),  # 25% шанс
+                    ("🖥 Бизнес ПК", 4.5, lambda: 1),  # 4.5% шанс
+                    ("⚡ Премиум", 0.167, lambda: random.randint(1, 24)),  # 0.5%/3 шанс
+                    ("🤖 Спонсор клуба", 0.167, lambda: random.randint(1, 24)),
+                    ("🔧 Автоматизация", 0.166, lambda: random.randint(1, 24)),
                 ],
                 "name": "💼 BUSINESS BOX"
             },
             "champion_chest": {
                 "rewards": [
-                    ("⏱ Заработок ПК", 60, lambda: random.randint(12, 24)),  # 12-24 часов
-                    ("🖥 Элитный ПК", 30, lambda: random.randint(1, 3)),
-                    ("⚡ Премиум", 3, lambda: random.randint(12, 64)),
-                    ("🤖 Спонсор клуба", 3, lambda: random.randint(12, 64)),
-                    ("🔧 Автоматизация", 3, lambda: random.randint(12, 64)),
+                    ("⏱ Макс доход игрока", 60, lambda: random.randint(1, 48)),  # 60% шанс
+                    ("⏱ Заработок ПК", 30, lambda: random.randint(1, 48)),  # 30% шанс
+                    ("🖥 Элитный ПК", 9.3, lambda: 1),  # 9.3% шанс
+                    ("⚡ Премиум", 0.233, lambda: random.randint(1, 48)),  # 0.7%/3 шанс
+                    ("🤖 Спонсор клуба", 0.233, lambda: random.randint(1, 48)),
+                    ("🔧 Автоматизация", 0.234, lambda: random.randint(1, 48)),
                 ],
                 "name": "🏆 CHAMPION CHEST"
             },
             "pro_gear": {
                 "rewards": [
-                    ("⏱ Заработок ПК", 50, lambda: random.randint(24, 48)),  # 24-48 часов
-                    ("🖥 Про-комплект ПК", 25, lambda: random.randint(2, 5)),
-                    ("⚡ Премиум", 8, lambda: random.randint(24, 128)),
-                    ("🤖 Спонсор клуба", 8, lambda: random.randint(24, 128)),
-                    ("🔧 Автоматизация", 8, lambda: random.randint(24, 128)),
+                    ("⏱ Макс доход игрока", 50, lambda: random.randint(1, 72)),  # 50% шанс
+                    ("⏱ Заработок ПК", 35, lambda: random.randint(1, 72)),  # 35% шанс
+                    ("🖥 Про-комплект ПК", 14, lambda: 1),  # 14% шанс
+                    ("⚡ Премиум", 0.333, lambda: random.randint(1, 72)),  # 1.0%/3 шанс
+                    ("🤖 Спонсор клуба", 0.333, lambda: random.randint(1, 72)),
+                    ("🔧 Автоматизация", 0.334, lambda: random.randint(1, 72)),
                 ],
-                "name": "🧳 PRO GEAR CASE"
+                "name": "🧳 PRO GEAR"
             },
             "legend_vault": {
                 "rewards": [
-                    ("⏱ Заработок ПК", 50, lambda: random.randint(48, 96)),  # 48-96 часов
-                    ("🖥 Легендарное оборудование", 25, lambda: random.randint(5, 10)),
-                    ("⚡ Премиум", 8, lambda: random.randint(48, 256)),
-                    ("🤖 Спонсор клуба", 8, lambda: random.randint(48, 256)),
-                    ("🔧 Автоматизация", 8, lambda: random.randint(48, 256)),
+                    ("⏱ Макс доход игрока", 40, lambda: random.randint(1, 96)),  # 40% шанс
+                    ("⏱ Заработок ПК", 40, lambda: random.randint(1, 96)),  # 40% шанс
+                    ("🖥 Легендарное оборудование", 18.5, lambda: 1),  # 18.5% шанс
+                    ("⚡ Премиум", 0.5, lambda: random.randint(1, 96)),  # 1.5%/3 шанс
+                    ("🤖 Спонсор клуба", 0.5, lambda: random.randint(1, 96)),
+                    ("🔧 Автоматизация", 0.5, lambda: random.randint(1, 96)),
                 ],
                 "name": "👑 LEGEND'S VAULT"
             },
             "vip_mystery": {
                 "rewards": [
-                    ("⏱ Заработок ПК", 40, lambda: random.randint(96, 168)),  # 96-168 часов
-                    ("🖥 VIP Ферма", 20, lambda: random.randint(10, 25)),
-                    ("⚡ Премиум", 13, lambda: random.randint(128, 512)),
-                    ("🤖 Спонсор клуба", 13, lambda: random.randint(128, 512)),
-                    ("🔧 Автоматизация", 13, lambda: random.randint(128, 512)),
+                    ("⏱ Макс доход игрока", 30, lambda: random.randint(1, 128)),  # 30% шанс
+                    ("⏱ Заработок ПК", 50, lambda: random.randint(1, 128)),  # 50% шанс
+                    ("🖥 VIP Ферма", 17, lambda: 1),  # 17% шанс
+                    ("⚡ Премиум", 1.0, lambda: random.randint(1, 128)),  # 3%/3 шанс
+                    ("🤖 Спонсор клуба", 1.0, lambda: random.randint(1, 128)),
+                    ("🔧 Автоматизация", 1.0, lambda: random.randint(1, 128)),
                 ],
                 "name": "🌟 VIP MYSTERY BOX"
             }
@@ -1538,6 +1625,26 @@ async def open_box(user_id: int, box_type: str):
                     ELSE datetime('now', '+' || ? || ' hours')
                 END WHERE userid = ?
             ''', (hours, hours, user_id))
+
+        # Отслеживаем открытие бокса для достижений
+        box_stat_map = {
+            "starter_pack": ("starter_pack_opened", "boxes_starter"),
+            "gamer_case": ("gamer_case_opened", "boxes_gamer"),
+            "business_box": ("business_box_opened", "boxes_business"),
+            "champion_chest": ("champion_chest_opened", "boxes_champion"),
+            "pro_gear": ("pro_gear_opened", "boxes_pro"),
+            "legend_vault": ("legend_vault_opened", "boxes_legend"),
+            "vip_mystery": ("vip_mystery_opened", "boxes_vip")
+        }
+
+        if box_type in box_stat_map:
+            stat_column, category = box_stat_map[box_type]
+            await ensure_user_achievement_stats(user_id)
+            await conn.execute(f'''
+            UPDATE user_achievement_stats SET {stat_column} = {stat_column} + 1
+            WHERE user_id = ?
+            ''', (user_id,))
+            await check_achievements(user_id, category)
 
         await conn.commit()
         return selected_reward
@@ -8059,7 +8166,8 @@ async def cmd_achievements(message: Message):
          InlineKeyboardButton(text="🛍 Инвестор", callback_data="ach_buy")],
         [InlineKeyboardButton(text="💸 Трейдер", callback_data="ach_sell"),
          InlineKeyboardButton(text="🖥 Экспансия", callback_data="ach_expansion")],
-        [InlineKeyboardButton(text="✨ Репутация", callback_data="ach_reputation")]
+        [InlineKeyboardButton(text="✨ Репутация", callback_data="ach_reputation")],
+        [InlineKeyboardButton(text="🎁 Боксы", callback_data="ach_boxes")]
     ])
 
     text = (
@@ -8084,13 +8192,35 @@ async def cb_achievement_category(callback: CallbackQuery):
              InlineKeyboardButton(text="🛍 Инвестор", callback_data="ach_buy")],
             [InlineKeyboardButton(text="💸 Трейдер", callback_data="ach_sell"),
              InlineKeyboardButton(text="🖥 Экспансия", callback_data="ach_expansion")],
-            [InlineKeyboardButton(text="✨ Репутация", callback_data="ach_reputation")]
+            [InlineKeyboardButton(text="✨ Репутация", callback_data="ach_reputation")],
+            [InlineKeyboardButton(text="🎁 Боксы", callback_data="ach_boxes")]
         ])
         text = (
             "🏆 <b>ЗАЛ СЛАВЫ ПК КЛУБА</b>\n\n"
             "Здесь отмечаются лучшие владельцы клубов!\n"
             "Выполняй задания и получай эксклюзивные кейсы с наградами.\n\n"
             "<i>Выбери категорию:</i>"
+        )
+        await callback.message.edit_text(text, reply_markup=builder, parse_mode="HTML")
+        await callback.answer()
+        return
+
+    if category == "boxes":
+        # Подменю боксов
+        builder = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📦 STARTER PACK", callback_data="ach_boxes_starter")],
+            [InlineKeyboardButton(text="🎮 GAMER'S CASE", callback_data="ach_boxes_gamer")],
+            [InlineKeyboardButton(text="💼 BUSINESS BOX", callback_data="ach_boxes_business")],
+            [InlineKeyboardButton(text="🏆 CHAMPION CHEST", callback_data="ach_boxes_champion")],
+            [InlineKeyboardButton(text="🧳 PRO GEAR", callback_data="ach_boxes_pro")],
+            [InlineKeyboardButton(text="👑 LEGEND'S VAULT", callback_data="ach_boxes_legend")],
+            [InlineKeyboardButton(text="🌟 VIP MYSTERY BOX", callback_data="ach_boxes_vip")],
+            [InlineKeyboardButton(text="« Назад", callback_data="ach_back")]
+        ])
+        text = (
+            "🎁 <b>ДОСТИЖЕНИЯ ЗА БОКСЫ</b>\n\n"
+            "Открывай боксы и получай награды за достижения!\n\n"
+            "<i>Выбери тип бокса:</i>"
         )
         await callback.message.edit_text(text, reply_markup=builder, parse_mode="HTML")
         await callback.answer()
@@ -8127,7 +8257,14 @@ async def cb_achievement_category(callback: CallbackQuery):
         'buy': '🛍 ИНВЕСТОР',
         'sell': '💸 ТРЕЙДЕР',
         'expansion': '🖥 ЭКСПАНСИЯ',
-        'reputation': '✨ РЕПУТАЦИЯ'
+        'reputation': '✨ РЕПУТАЦИЯ',
+        'boxes_starter': '📦 STARTER PACK',
+        'boxes_gamer': '🎮 GAMER\'S CASE',
+        'boxes_business': '💼 BUSINESS BOX',
+        'boxes_champion': '🏆 CHAMPION CHEST',
+        'boxes_pro': '🧳 PRO GEAR',
+        'boxes_legend': '👑 LEGEND\'S VAULT',
+        'boxes_vip': '🌟 VIP MYSTERY BOX'
     }
 
     progress = min(100, (achievement['current_value'] / achievement['target_value']) * 100) if achievement['target_value'] > 0 else 0
