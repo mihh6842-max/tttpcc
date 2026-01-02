@@ -632,7 +632,19 @@ async def update_database_schema():
         # Добавляем колонку если её нет
         await conn.execute('ALTER TABLE stats ADD COLUMN expansion_level INTEGER DEFAULT 0')
         logger.info("Added expansion_level column to stats table")
-    
+
+    # Проверяем и добавляем колонки для боксов
+    box_columns = [
+        'starter_pack_opened', 'gamer_case_opened', 'business_box_opened',
+        'champion_chest_opened', 'pro_gear_opened', 'legend_vault_opened', 'vip_mystery_opened'
+    ]
+    for column in box_columns:
+        try:
+            await conn.execute(f'SELECT {column} FROM user_achievement_stats LIMIT 1')
+        except Exception:
+            await conn.execute(f'ALTER TABLE user_achievement_stats ADD COLUMN {column} INTEGER DEFAULT 0')
+            logger.info(f"Added {column} column to user_achievement_stats table")
+
     await conn.commit()
 
 
@@ -882,18 +894,6 @@ async def init_db():
             vip_mystery_opened INTEGER DEFAULT 0
         )
     ''')
-
-    # Добавляем колонки для боксов если их нет
-    box_columns = [
-        'starter_pack_opened', 'gamer_case_opened', 'business_box_opened',
-        'champion_chest_opened', 'pro_gear_opened', 'legend_vault_opened', 'vip_mystery_opened'
-    ]
-    for column in box_columns:
-        try:
-            await conn.execute(f'ALTER TABLE user_achievement_stats ADD COLUMN {column} INTEGER DEFAULT 0')
-            logger.info(f"Added {column} column to user_achievement_stats table")
-        except:
-            pass  # Column already exists
 
     # Таблица батл пасса
     await conn.execute('''
@@ -1645,27 +1645,21 @@ async def open_box(user_id: int, box_type: str):
                 END WHERE userid = ?
             ''', (hours, hours, user_id))
 
+        await conn.commit()
+
         # Отслеживаем открытие бокса для достижений
         box_stat_map = {
-            "starter_pack": ("starter_pack_opened", "boxes_starter"),
-            "gamer_case": ("gamer_case_opened", "boxes_gamer"),
-            "business_box": ("business_box_opened", "boxes_business"),
-            "champion_chest": ("champion_chest_opened", "boxes_champion"),
-            "pro_gear": ("pro_gear_opened", "boxes_pro"),
-            "legend_vault": ("legend_vault_opened", "boxes_legend"),
-            "vip_mystery": ("vip_mystery_opened", "boxes_vip")
+            "starter_pack": "boxes_starter",
+            "gamer_case": "boxes_gamer",
+            "business_box": "boxes_business",
+            "champion_chest": "boxes_champion",
+            "pro_gear": "boxes_pro",
+            "legend_vault": "boxes_legend",
+            "vip_mystery": "boxes_vip"
         }
 
         if box_type in box_stat_map:
-            stat_column, category = box_stat_map[box_type]
-            await ensure_user_achievement_stats(user_id)
-            await conn.execute(f'''
-            UPDATE user_achievement_stats SET {stat_column} = {stat_column} + 1
-            WHERE user_id = ?
-            ''', (user_id,))
-            await check_achievements(user_id, category)
-
-        await conn.commit()
+            await update_user_achievement_stat(user_id, box_stat_map[box_type], 1)
         return selected_reward
     except Exception as e:
         logging.error(f"Error opening box: {e}")
