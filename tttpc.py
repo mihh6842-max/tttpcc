@@ -3140,6 +3140,115 @@ async def cmd_give_box(message: Message):
         logger.error(f"Error giving boxes: {e}")
         await message.answer('❌ Ошибка при выдаче кейсов')
 
+@cmd_admin_router.message(Command('give_all_boxes'))
+async def cmd_give_all_boxes(message: Message):
+    """Выдать кейсы всем пользователям"""
+    if message.from_user.id not in ADMIN:
+        await message.answer('❌ Недостаточно прав')
+        return
+
+    text_parts = message.text.split(' ')
+
+    if len(text_parts) != 3:
+        await message.answer(
+            '⚠️ Используйте: /give_all_boxes (тип_кейса) (количество)\n\n'
+            '*Типы кейсов:*\n'
+            '• starter_pack\n'
+            '• gamer_case\n'
+            '• business_box\n'
+            '• champion_chest\n'
+            '• pro_gear\n'
+            '• legend_vault\n'
+            '• vip_mystery\n\n'
+            '*Пример:*\n'
+            '`/give_all_boxes gamer_case 5`',
+            parse_mode='Markdown'
+        )
+        return
+
+    box_type = text_parts[1].lower()
+
+    # Проверка типа кейса
+    valid_boxes = ['starter_pack', 'gamer_case', 'business_box', 'champion_chest', 'pro_gear', 'legend_vault', 'vip_mystery']
+    if box_type not in valid_boxes:
+        await message.answer(f'❌ Неверный тип кейса. Доступные типы: {", ".join(valid_boxes)}')
+        return
+
+    # Проверка количества
+    if not text_parts[2].isdigit():
+        await message.answer('❌ Количество должно быть числом')
+        return
+
+    amount = int(text_parts[2])
+    if amount <= 0:
+        await message.answer('❌ Количество должно быть больше 0')
+        return
+
+    try:
+        # Получаем всех пользователей
+        all_users = await execute_query('SELECT userid FROM stats')
+
+        if not all_users:
+            await message.answer('❌ В базе нет пользователей')
+            return
+
+        total_count = len(all_users)
+        success_count = 0
+
+        # Название кейса для отображения
+        box_names = {
+            'starter_pack': '📦 STARTER PACK',
+            'gamer_case': '🎮 GAMER CASE',
+            'business_box': '💼 BUSINESS BOX',
+            'champion_chest': '🏆 CHAMPION CHEST',
+            'pro_gear': '⚡ PRO GEAR',
+            'legend_vault': '🔥 LEGEND VAULT',
+            'vip_mystery': '💎 VIP MYSTERY'
+        }
+        box_display_name = box_names.get(box_type, box_type)
+
+        # Выдаем всем
+        for user_row in all_users:
+            user_id = user_row[0]
+
+            try:
+                # Проверяем есть ли запись в user_boxes
+                existing = await execute_query_one(
+                    'SELECT user_id FROM user_boxes WHERE user_id = ?',
+                    (user_id,)
+                )
+
+                if not existing:
+                    await execute_update(
+                        'INSERT INTO user_boxes (user_id) VALUES (?)',
+                        (user_id,)
+                    )
+
+                # Добавляем кейсы
+                await execute_update(
+                    f'UPDATE user_boxes SET {box_type} = {box_type} + ? WHERE user_id = ?',
+                    (amount, user_id)
+                )
+
+                success_count += 1
+
+            except Exception as e:
+                logger.error(f"Error giving boxes to user {user_id}: {e}")
+
+        await message.answer(
+            f'✅ <b>Кейсы успешно выданы всем пользователям!</b>\n\n'
+            f'👥 Получили: <b>{success_count}/{total_count}</b>\n'
+            f'📦 Тип: <b>{box_display_name}</b>\n'
+            f'📊 Количество каждому: <b>{amount}</b> шт',
+            parse_mode='HTML'
+        )
+
+        logger.info(f"Admin {message.from_user.id} gave {amount} {box_type} to all users")
+
+    except Exception as e:
+        logger.error(f"Error in give_all_boxes: {e}")
+        await message.answer('❌ Ошибка при выдаче кейсов')
+
 @cmd_admin_router.message(Command('complete_achievement'))
 async def cmd_complete_achievement(message: Message):
     """Выполнить достижение для пользователя"""
