@@ -872,9 +872,28 @@ async def init_db():
             total_buy_count INTEGER DEFAULT 0,
             total_sell_count INTEGER DEFAULT 0,
             max_expansion_level INTEGER DEFAULT 0,
-            max_reputation_level INTEGER DEFAULT 0
+            max_reputation_level INTEGER DEFAULT 0,
+            starter_pack_opened INTEGER DEFAULT 0,
+            gamer_case_opened INTEGER DEFAULT 0,
+            business_box_opened INTEGER DEFAULT 0,
+            champion_chest_opened INTEGER DEFAULT 0,
+            pro_gear_opened INTEGER DEFAULT 0,
+            legend_vault_opened INTEGER DEFAULT 0,
+            vip_mystery_opened INTEGER DEFAULT 0
         )
     ''')
+
+    # Добавляем колонки для боксов если их нет
+    box_columns = [
+        'starter_pack_opened', 'gamer_case_opened', 'business_box_opened',
+        'champion_chest_opened', 'pro_gear_opened', 'legend_vault_opened', 'vip_mystery_opened'
+    ]
+    for column in box_columns:
+        try:
+            await conn.execute(f'ALTER TABLE user_achievement_stats ADD COLUMN {column} INTEGER DEFAULT 0')
+            logger.info(f"Added {column} column to user_achievement_stats table")
+        except:
+            pass  # Column already exists
 
     # Таблица батл пасса
     await conn.execute('''
